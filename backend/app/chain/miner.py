@@ -76,6 +76,7 @@ class MinerControl:
         self.paused_seconds = 0.0
         self._pause_mark = 0.0
         self.hashrate = 0.0
+        self.samples: list[dict] = []
         self._sample_hashes = 0
         self._sample_at = 0.0
         self.lock = threading.Lock()
@@ -92,6 +93,7 @@ class MinerControl:
             self.success = 0
             self.failed = 0
             self.hashrate = 0.0
+            self.samples = []
             self._sample_hashes = 0
             self._sample_at = self.started
             self.status = "running"
@@ -142,6 +144,8 @@ class MinerControl:
                 self.hashrate = (self.hashes - self._sample_hashes) / elapsed
                 self._sample_hashes = self.hashes
                 self._sample_at = now
+                self.samples.append({"t": int(time.time()), "hashrate": round(self.hashrate, 2)})
+                self.samples = self.samples[-240:]
 
     def _loop(self) -> None:
         while not self.stop_event.is_set():

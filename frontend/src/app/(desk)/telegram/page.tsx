@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { PageTitle } from "@/components/Shell";
-import { apiJson } from "@/lib/api";
+import { apiJson, isSystemAdmin, type User } from "@/lib/api";
 
 type TelegramChat = { id: string; title: string; type: string; selected: boolean };
 type PendingTrade = {
@@ -18,6 +18,7 @@ type PendingTrade = {
 };
 
 export default function TelegramPage() {
+  const [me, setMe] = useState<User | null>(null);
   const [message, setMessage] = useState("");
   const [appId, setAppId] = useState("");
   const [telegramReady, setTelegramReady] = useState(false);
@@ -40,6 +41,7 @@ export default function TelegramPage() {
   }
 
   useEffect(() => {
+    apiJson<User>("/api/v1/auth/me").then(setMe).catch(() => undefined);
     loadStatus();
   }, []);
 
@@ -216,8 +218,9 @@ export default function TelegramPage() {
   return (
     <div className="telegram-layout">
       <div className="flex flex-col gap-8 min-w-0">
+      {isSystemAdmin(me?.roles) ? (
       <section>
-        <PageTitle title="Telegram" detail="App ID and the app API hash come from my.telegram.org. The bot token comes from BotFather." />
+        <PageTitle title="Telegram" detail="App and bot keys are saved in Settings. This page is for the phone login and signal chats." />
         <form id="telegram-settings" className="flex flex-col gap-3" autoComplete="off" onSubmit={saveTelegram}>
           <label className="flex flex-col gap-1 text-sm">
             App ID
@@ -236,8 +239,14 @@ export default function TelegramPage() {
             <button className="ghost" type="button" onClick={sendTelegramTest}>Send test</button>
           </div>
         </form>
-        <p className="text-sm text-muted mt-3">Messages in the chat that received the test are sent to DeepSeek. It can open, change, and close trades on the one account where Allow DeepSeek to trade is on. That chat keeps the last few messages for 30 minutes, so a follow-up such as “set a buy limit for that” uses the chart OpenAI just read. The desk keeps the bot webhook off so those messages arrive here.</p>
+        <p className="text-sm text-muted mt-3">Prefer Settings for these keys. Users only sign in with their phone below.</p>
       </section>
+      ) : (
+        <section>
+          <PageTitle title="Telegram" detail="Sign in with your phone. The app and bot keys are set in Settings." />
+          {telegramReady ? null : <p className="text-sm text-muted">Telegram is not ready yet. The app still needs to be saved in Settings.</p>}
+        </section>
+      )}
       <section>
         <h2 className="text-lg font-semibold">Copy signals</h2>
         <p className="text-sm text-muted mt-1">Sign in with your phone so the desk can read chats you already belong to. DeepSeek keeps a message only when it has a pair, a direction, and an entry. Stop and target may be missing. Ordinary chat is ignored. A found trade stays pending for 10 minutes, then it is deleted if it was not executed. Turn on auto execute to send it as soon as it is found. The risk engine still decides. The reply arrives on the bot chat. The chat name is stored as the trade comment.</p>

@@ -13,6 +13,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "alerts.read",
         "alerts.manage",
         "audit.read",
+        "system.configure",
         "ai.configure",
         "ai.invoke",
         "webhooks.manage",
@@ -22,6 +23,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "funds.manage",
         "chain.read",
         "chain.mine",
+        "chain.admin",
     },
     "RISK_MANAGER": {
         "accounts.read",

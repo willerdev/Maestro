@@ -5,8 +5,8 @@ from decimal import Decimal, InvalidOperation
 
 from app.connectors.types import NormalizedAccount, NormalizedPosition, NormalizedQuote
 
-_BUY = {"buy", "long", "0", "position_type_buy", "op_buy"}
-_SELL = {"sell", "short", "1", "position_type_sell", "op_sell"}
+_BUY = {"buy", "long", "0", "position_type_buy", "op_buy", "call"}
+_SELL = {"sell", "short", "1", "position_type_sell", "op_sell", "put"}
 
 
 class NormalizeError(ValueError):

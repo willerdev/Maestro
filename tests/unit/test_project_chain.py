@@ -107,6 +107,16 @@ def test_tampered_history_is_rejected():
         changed.validate()
 
 
+def test_the_same_block_cannot_credit_a_reward_twice():
+    ledger, miner = opened()
+    block = mine(ledger, miner, 10)
+    with pytest.raises(ChainError):
+        ledger.accept(block)
+    balances, _, minted = ledger.state()
+    assert balances[miner] == 50 * UNIT
+    assert minted == 50 * UNIT
+
+
 def test_invalid_block_is_rejected():
     ledger, miner = opened()
     block = ledger.candidate(miner, 10)

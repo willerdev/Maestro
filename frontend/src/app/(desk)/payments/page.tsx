@@ -3,7 +3,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { PageTitle } from "@/components/Shell";
 import { apiJson } from "@/lib/api";
-import { keepDefaultWallet } from "@/lib/defaultWallet";
+import { ExtraWallets } from "@/components/ExtraWallets";
+import { keepDefaultWallet, publicWalletLabel } from "@/lib/defaultWallet";
 
 type Provider = { configured: boolean; provider: string; wallet: string; sandbox: boolean; enabled: boolean; callback_url: string; detail?: string };
 type Payment = {
@@ -23,61 +24,20 @@ type Payment = {
 
 export default function PaymentsPage() {
   const [provider, setProvider] = useState<Provider | null>(null);
-  const [wallet, setWallet] = useState<"hosted" | "external">("hosted");
-  const [choice, setChoice] = useState("nowpayments");
-  const [apiUrl, setApiUrl] = useState("https://api.nowpayments.io/v1");
   const [rows, setRows] = useState<Payment[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [created, setCreated] = useState<Payment | null>(null);
 
   function load() {
-    return Promise.all([keepDefaultWallet(), apiJson<Payment[]>("/api/v1/payments")]).then(([config, payments]) => {
-      setProvider(config as Provider);
-      if (config.wallet === "external" || config.wallet === "hosted") setWallet(config.wallet);
-      if ("provider" in config && config.provider) setChoice(String(config.provider));
-      setRows(payments);
-    });
+    return keepDefaultWallet()
+      .then((config) => setProvider(config as Provider))
+      .then(() => apiJson<Payment[]>("/api/v1/payments").then(setRows).catch(() => setRows([])));
   }
 
   useEffect(() => {
     load().catch((err: Error) => setError(err.message));
   }, []);
-
-  async function saveProvider(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setError("");
-    setMessage("");
-    try {
-      const body = await apiJson<Provider>("/api/v1/payments/provider", {
-        method: "PUT",
-        body: JSON.stringify(wallet === "hosted"
-          ? { provider: "nowpayments", wallet: "hosted", sandbox: false, credentials: {} }
-          : {
-              provider: choice,
-              wallet: "external",
-              sandbox: form.get("sandbox") === "on",
-              credentials: {
-                api_key: form.get("api_key"),
-                api_url: form.get("api_url"),
-                ipn_secret: form.get("ipn_secret"),
-                payout_email: form.get("payout_email"),
-                payout_password: form.get("payout_password"),
-                merchant_id: form.get("merchant_id"),
-              },
-            }),
-      });
-      setProvider(body);
-      setMessage(body.detail
-        ? body.detail
-        : body.wallet === "hosted"
-          ? "Default self-hosted wallet is connected. The keys stay on the server."
-          : body.configured ? `${body.provider} is connected. The API key is stored encrypted.` : "Provider was not saved.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Provider check failed");
-    }
-  }
 
   async function requestPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -106,82 +66,18 @@ export default function PaymentsPage() {
     <div className="max-w-5xl">
       <PageTitle
         title="Crypto payments"
-        detail="The default self-hosted wallet is used unless you connect an external wallet. Maestro records paid only when the provider confirms it."
+        detail="The default self-hosted wallet stays the payment wallet. Ledger, Binance, Bybit, and OKX are extra public-address connections."
       />
       {error ? <p className="text-loss mb-3">{error}</p> : null}
       {message ? <p className="text-sm mb-3">{message}</p> : null}
-      {wallet === "hosted" || provider?.wallet === "hosted" ? (
-        <p className="text-sm text-muted mb-4">Default self-hosted wallet is selected. The keys stay on the server.</p>
-      ) : !provider?.configured ? (
-        <p className="mb-4 text-sm border border-line bg-panel rounded-lg px-3 py-3">
-          An external wallet needs NOWPayments or Cryptomus. The check must succeed before it is kept.
-        </p>
-      ) : (
-        <p className="text-sm text-muted mb-4">
-          {provider.wallet === "hosted" ? "Default self-hosted wallet is connected." : (
-            <>Active provider: {provider.provider}{provider.sandbox ? " (sandbox)" : ""}. Callback {provider.callback_url}</>
-          )}
-        </p>
-      )}
-      <form className="flex flex-col gap-3 max-w-xl mb-8" onSubmit={saveProvider}>
-        <div className="grid gap-2">
-          <label className={`choice ${wallet === "hosted" ? "on" : ""}`}>
-            <input type="radio" checked={wallet === "hosted"} onChange={() => setWallet("hosted")} />
-            <span>
-              <strong>Default self-hosted wallet</strong>
-              <span className="block text-sm text-muted">Maestro uses its own wallet. The payment keys stay on the server and are not shown here.</span>
-            </span>
-          </label>
-          <label className={`choice ${wallet === "external" ? "on" : ""}`}>
-            <input type="radio" checked={wallet === "external"} onChange={() => setWallet("external")} />
-            <span>
-              <strong>External wallet</strong>
-              <span className="block text-sm text-muted">Connect your own NOWPayments or Cryptomus account.</span>
-            </span>
-          </label>
-        </div>
-        {wallet === "external" ? (
-          <>
-            <p className="text-sm border border-line rounded-lg px-3 py-3">
-              External wallets are risky. The provider holds the payment, and fees may be applied.
-            </p>
-            <div className="grid gap-2">
-              <label className={`choice ${choice === "nowpayments" ? "on" : ""}`}>
-                <input type="radio" checked={choice === "nowpayments"} onChange={() => setChoice("nowpayments")} />
-                <span>NOWPayments</span>
-              </label>
-              <label className={`choice ${choice === "cryptomus" ? "on" : ""}`}>
-                <input type="radio" checked={choice === "cryptomus"} onChange={() => setChoice("cryptomus")} />
-                <span>Cryptomus</span>
-              </label>
-            </div>
-            {choice === "cryptomus" ? <input name="merchant_id" placeholder="Merchant id" required autoComplete="off" /> : null}
-            <input name="api_key" type="password" placeholder="API key" required autoComplete="off" />
-            {choice === "nowpayments" ? (
-              <>
-                <input name="api_url" type="url" placeholder="API URL" required value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} autoComplete="off" />
-                <input name="payout_email" type="text" placeholder="Payout email, same as the dashboard" required autoComplete="username" />
-                <input name="payout_password" type="password" placeholder="Payout password" required autoComplete="new-password" />
-                <input name="ipn_secret" type="password" placeholder="IPN secret" required autoComplete="off" />
-                <label className="text-sm flex gap-2 items-center">
-                  <input
-                    className="w-auto"
-                    type="checkbox"
-                    name="sandbox"
-                    onChange={(event) => setApiUrl(event.target.checked ? "https://api-sandbox.nowpayments.io/v1" : "https://api.nowpayments.io/v1")}
-                  />{" "}
-                  Sandbox API URL
-                </label>
-              </>
-            ) : null}
-          </>
-        ) : null}
-        <button className="primary" type="submit">{wallet === "hosted" ? "Save default wallet" : "Check and save provider"}</button>
-      </form>
+      <p className="text-sm text-muted mb-4">
+        The default wallet is set in Settings. You can still attach extra public wallets below and request a payment once the default wallet is ready.
+      </p>
+      <ExtraWallets />
       <form className="grid md:grid-cols-3 gap-3 max-w-4xl mb-8" onSubmit={requestPayment}>
         <input name="price_amount" type="number" min="0.01" step="0.01" placeholder="Amount" required />
         <input name="price_currency" defaultValue="USD" placeholder="Price currency" required />
-        <input name="pay_currency" placeholder="Coin, optional (btc, USDT)" />
+        <input name="pay_currency" defaultValue="usdttrc20" placeholder="USDT TRC20" />
         <select name="purpose" defaultValue="deposit">
           <option value="deposit">Deposit</option>
           <option value="subscription">Subscription</option>
@@ -192,8 +88,8 @@ export default function PaymentsPage() {
       </form>
       {created ? (
         <p className="text-sm mb-4">
-          Status {created.status}. Provider status {created.provider_status || "—"}.
-          {created.invoice_url ? <> Checkout: {created.invoice_url}</> : null}
+          Status {created.status}{created.provider_status ? ` · ${created.provider_status}` : ""}.
+          {created.invoice_url ? <> <a className="text-accent" href={created.invoice_url}>Open the invoice</a></> : null}
           {created.pay_address ? <> Address: <span className="num">{created.pay_address}</span></> : null}
         </p>
       ) : null}
@@ -214,7 +110,7 @@ export default function PaymentsPage() {
               <td>{row.purpose}</td>
               <td className="num">{row.price_amount} {row.price_currency}</td>
               <td>{row.status}</td>
-              <td>{row.provider_status || row.provider}</td>
+              <td>{row.provider_status || publicWalletLabel(row.provider)}</td>
             </tr>
           ))}
           {rows.length === 0 ? (

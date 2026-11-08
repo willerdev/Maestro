@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { apiJson } from "@/lib/api";
-import { keepDefaultWallet } from "@/lib/defaultWallet";
+import { keepDefaultWallet, publicWalletLabel } from "@/lib/defaultWallet";
 
 type Balance = { currency: string; available: string };
 type Transfer = {
@@ -19,6 +19,11 @@ type Transfer = {
 };
 type Home = { configured: boolean; provider: string; balances: Balance[]; transfers: Transfer[] };
 
+function coinLabel(value: string) {
+  if (!value || value === "usdttrc20" || value === "usdt") return "USDT TRC20";
+  return value.toUpperCase();
+}
+
 function when(value: string) {
   if (!value) return "—";
   const date = new Date(value);
@@ -26,11 +31,27 @@ function when(value: string) {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function directionLabel(direction: string) {
+  if (direction === "expense") return "Expense";
+  if (direction === "withdraw") return "Withdraw";
+  if (direction === "contract") return "Contract";
+  if (direction === "mining_upgrade") return "Mining upgrade";
+  return "Deposit";
+}
+
+function statusLabel(status: string) {
+  if (status === "requested") return "Waiting for approval";
+  if (status === "pending") return "Sending";
+  if (status === "posted") return "Sent";
+  if (status === "rejected") return "Rejected";
+  return status;
+}
+
 function tone(status: string) {
   const value = status.toLowerCase();
   if (["finished", "confirmed", "paid", "completed", "success"].includes(value)) return "ok";
   if (["failed", "expired", "rejected", "refunded"].includes(value)) return "bad";
-  if (["waiting", "pending", "confirming", "sending"].includes(value)) return "warn";
+  if (["waiting", "pending", "confirming", "sending", "requested"].includes(value)) return "warn";
   return "idle";
 }
 
@@ -65,7 +86,8 @@ export default function WalletPage() {
 
   async function sendDeposit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formEl = event.currentTarget;
+    const form = new FormData(formEl);
     setError("");
     setMessage("");
     try {
@@ -75,7 +97,7 @@ export default function WalletPage() {
       });
       setDeposit(row);
       setMessage("Deposit created. The balance changes after the provider confirms the crypto was paid.");
-      event.currentTarget.reset();
+      formEl.reset();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit was not created");
@@ -84,7 +106,8 @@ export default function WalletPage() {
 
   async function sendWithdrawal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formEl = event.currentTarget;
+    const form = new FormData(formEl);
     setError("");
     setMessage("");
     try {
@@ -92,8 +115,8 @@ export default function WalletPage() {
         method: "POST",
         body: JSON.stringify({ currency: form.get("currency"), amount: form.get("amount"), address: form.get("address") }),
       });
-      setMessage("Withdrawal sent. It uses only crypto already confirmed in this wallet.");
-      event.currentTarget.reset();
+      setMessage("Withdrawal requested. It has to be approved before it is sent.");
+      formEl.reset();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Withdrawal was not sent");
@@ -113,19 +136,19 @@ export default function WalletPage() {
             {refreshing ? "Refreshing" : "Live"}
             {updated ? ` · ${updated.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
           </span>
-          <span>{home?.configured ? home.provider || "Wallet connected" : "Wallet not connected"}</span>
+          <span>{home?.configured ? publicWalletLabel(home.provider) : "Wallet not connected"}</span>
         </div>
         <h1>Wallet</h1>
         <div className="wallet-figure">
           <div>
-            <span>{lead ? `${lead.currency} available` : "Available"}</span>
+            <span>{lead ? `${coinLabel(lead.currency)} available` : "USDT TRC20 available"}</span>
             <strong className="num">{lead ? lead.available : "0.00"}</strong>
           </div>
           <div className="wallet-coins">
             {balances.length === 0 ? <p className="wallet-empty">No confirmed crypto yet.</p> : null}
             {balances.slice(1).map((row, index) => (
               <article key={row.currency} className="wallet-coin" style={{ animationDelay: `${index * 60}ms` }}>
-                <b>{row.currency}</b>
+                <b>{coinLabel(row.currency)}</b>
                 <em className="num">{row.available}</em>
               </article>
             ))}
@@ -150,8 +173,14 @@ export default function WalletPage() {
           {mode === "deposit" ? (
             <form className="wallet-form" onSubmit={sendDeposit}>
               <label>
-                <span>Ticker</span>
-                <input name="currency" placeholder="btc or usdttrc20" required autoComplete="off" />
+                <span>Coin</span>
+                <select name="currency" defaultValue="usdttrc20" required>
+                  <option value="usdttrc20">USDT TRC20</option>
+                  <option value="btc">BTC</option>
+                  <option value="eth">ETH</option>
+                  <option value="usdterc20">USDT ERC20</option>
+                  <option value="usdtbsc">USDT BEP20</option>
+                </select>
               </label>
               <label>
                 <span>Amount</span>
@@ -162,8 +191,12 @@ export default function WalletPage() {
           ) : (
             <form className="wallet-form" onSubmit={sendWithdrawal}>
               <label>
-                <span>Ticker</span>
-                <input name="currency" placeholder="btc" required autoComplete="off" />
+                <span>Coin</span>
+                <select name="currency" defaultValue="usdttrc20" required>
+                  <option value="usdttrc20">USDT TRC20</option>
+                  <option value="btc">BTC</option>
+                  <option value="eth">ETH</option>
+                </select>
               </label>
               <label>
                 <span>Amount</span>
@@ -173,14 +206,14 @@ export default function WalletPage() {
                 <span>Destination</span>
                 <input name="address" placeholder="Payout address" required autoComplete="off" />
               </label>
-              <button className="primary" type="submit">Send withdrawal</button>
+              <button className="primary" type="submit">Request withdrawal</button>
             </form>
           )}
           {deposit && mode === "deposit" ? (
             <div className="wallet-receipt">
-              <p className="text-sm">Pay <span className="num">{deposit.amount} {deposit.currency}</span></p>
+              <p className="text-sm">Pay <span className="num">{deposit.amount} {coinLabel(deposit.currency)}</span></p>
               <p className="text-sm mt-1"><span className={`pill ${tone(deposit.status)}`}>{deposit.status}</span></p>
-              {deposit.address ? <p className="num break-all text-sm mt-2">{deposit.address}</p> : null}
+              {deposit.address ? <p className="num break-all text-sm mt-2">{deposit.address}</p> : <p className="text-sm mt-2">No deposit address was returned.</p>}
               {deposit.invoice_url ? <p className="text-sm mt-2"><a className="text-accent" href={deposit.invoice_url}>Open the invoice</a></p> : null}
             </div>
           ) : null}
@@ -191,16 +224,16 @@ export default function WalletPage() {
           <div className="wallet-feed">
             {transfers.length === 0 ? <p className="wallet-empty">Transfers appear here as soon as you create one.</p> : null}
             {transfers.map((row, index) => {
-              const incoming = row.direction !== "withdraw";
+              const incoming = row.direction !== "withdraw" && row.direction !== "expense" && row.direction !== "contract" && row.direction !== "mining_upgrade";
               return (
                 <article key={row.id} className="wallet-row" style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}>
                   <div className={`wallet-mark ${incoming ? "in" : "out"}`} aria-hidden="true">{incoming ? "↓" : "↑"}</div>
                   <div>
-                    <p>{incoming ? "Deposit" : "Withdraw"} <span className="num">{row.amount} {row.currency}</span></p>
+                    <p>{directionLabel(row.direction)} <span className="num">{row.amount} {coinLabel(row.currency)}</span></p>
                     <p className="meta num">{row.address || when(row.created_at)}{row.note ? ` · ${row.note}` : ""}</p>
                   </div>
                   <div className="text-right">
-                    <span className={`pill ${tone(row.status)}`}>{row.status}</span>
+                    <span className={`pill ${tone(row.status)}`}>{statusLabel(row.status)}</span>
                     <p className="meta">{when(row.created_at)}</p>
                   </div>
                 </article>

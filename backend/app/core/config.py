@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     nowpayments_ipn_secret: str = ""
     nowpayments_payout_email: str = ""
     nowpayments_payout_password: str = ""
+    nowpayments_public_key: str = ""
     chain_coin_name: str = "Project Coin"
     chain_symbol: str = "PCOIN"
     chain_max_supply: int = 21_000_000

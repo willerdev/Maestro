@@ -72,8 +72,31 @@ def role_codes_for(db: Session, user_id) -> list[str]:
     return [row[0] for row in rows]
 
 
+def super_admin_exists(db: Session) -> bool:
+    return (
+        db.scalar(
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(Role.code == "SUPER_ADMIN")
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def public_register_allowed(db: Session) -> bool:
+    from app.core.config import get_settings
+
+    if get_settings().environment == "test":
+        return True
+    return not super_admin_exists(db)
+
+
 def register_user(db: Session, *, email: str, password: str, full_name: str, organization_name: str, ip: str) -> tuple[User, str, str]:
     ensure_rbac(db)
+    if not public_register_allowed(db):
+        raise AuthError(403, "This desk already has an owner. Ask them to add you, or apply to join.")
     if not password_is_strong(password):
         raise AuthError(400, "Password must be at least 12 characters and include a letter and a digit")
     normalized = email.strip().lower()
@@ -215,6 +238,8 @@ def reset_password(db: Session, raw_token: str, new_password: str) -> None:
 
 
 def create_member(db: Session, actor: User, *, email: str, password: str, full_name: str, role_code: str, ip: str) -> User:
+    if role_code == "SUPER_ADMIN":
+        raise AuthError(403, "That role cannot be created")
     if role_code not in ROLE_PERMISSIONS:
         raise AuthError(400, "Unknown role")
     if not password_is_strong(password):

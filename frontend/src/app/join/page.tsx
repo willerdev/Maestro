@@ -82,7 +82,7 @@ export default function JoinPage() {
           <ThemeToggle />
         </div>
         <h1 className="text-2xl font-semibold mb-1">Apply to join</h1>
-        <p className="text-sm text-muted mb-4">An admin reviews this before you can see a fund or a trading book. Use the join code they gave you.</p>
+        <p className="text-sm text-muted mb-4">This is reviewed before you can see a fund or a trading book. Use the join code you were given.</p>
         {error ? <p className="text-loss text-sm mb-3">{error}</p> : null}
         <form className="grid md:grid-cols-2 gap-3" onSubmit={onSubmit}>
           <input name="code" placeholder="Join code" required className="uppercase" />
@@ -156,7 +156,7 @@ function InvestorFields() {
       <input name="id_last4" placeholder="Last 4 of that document" maxLength={4} required />
       <label className="text-sm flex gap-2 items-start md:col-span-2">
         <input className="w-auto mt-1" type="checkbox" name="risk_accepted" required />
-        I understand the amount I commit can be lost, and a subscription is only recorded after the admin approves it.
+        I understand the amount I commit can be lost, and a subscription is only recorded after it is approved.
       </label>
     </>
   );
@@ -202,7 +202,7 @@ function TraderFields({ markets, setMarkets }: { markets: string[]; setMarkets: 
       <input name="emergency_contact_phone" placeholder="Emergency contact phone" required />
       <label className="text-sm flex gap-2 items-start md:col-span-2">
         <input className="w-auto mt-1" type="checkbox" name="rules_accepted" required />
-        I will follow the desk risk rules. A block from the desk is final unless an admin pauses it.
+        I will follow the desk risk rules. A block from the desk is final unless the desk pauses it.
       </label>
     </>
   );

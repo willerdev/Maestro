@@ -162,10 +162,10 @@ def _apply_profile(db: Session, user: User, payload: dict) -> Organization:
         raise SetupError(400, "Enter a phone number")
     email = str(payload.get("admin_email") or "").strip().lower()
     if "@" not in email or len(email) > 320:
-        raise SetupError(400, "Enter the admin email")
+        raise SetupError(400, "Enter the desk email")
     taken = db.scalar(select(User).where(User.email == email, User.id != user.id))
     if taken is not None:
-        raise SetupError(409, "Admin email is already registered")
+        raise SetupError(409, "That email is already registered")
     org = db.get(Organization, user.organization_id)
     org.country = country
     org.language = language
@@ -218,12 +218,22 @@ def complete_setup(db: Session, user: User, roles: list[str], payload: dict, ip:
             raise SetupError(401, "Google Authenticator code did not match")
         mfa_on = True
     account, secrets, method = _optional_account(db, user, roles, payload.get("account"), ip)
-    payment = payload.get("payment")
-    if payment:
-        try:
-            save_provider(db, user, payment, ip)
-        except PaymentError as exc:
-            raise SetupError(exc.status, exc.detail) from exc
+    payment = payload.get("payment") or {}
+    try:
+        save_provider(
+            db,
+            user,
+            {
+                "provider": "nowpayments",
+                "wallet": "hosted",
+                "sandbox": False,
+                "credentials": {},
+            },
+            ip,
+        )
+    except PaymentError as exc:
+        if str(payment.get("wallet") or "hosted") == "external":
+            raise SetupError(400, "The default wallet is configured in Settings") from exc
     org = _apply_profile(db, user, payload)
     if mfa_on and row is not None:
         row.enabled = True
@@ -251,8 +261,8 @@ def _optional_account(db: Session, user: User, roles: list[str], account_in: dic
     if not account_in:
         return None, None, ""
     method = str(account_in.get("connection_method") or "")
-    if method not in {"metaapi", "local_mt5", "pocketoption", "blockchain", "mining"}:
-        raise SetupError(400, "Choose MetaAPI, MetaTrader 5, Pocket Option, contracts, or mining")
+    if method not in {"metaapi", "local_mt5", "passprop", "pocketoption", "blockchain", "mining"}:
+        raise SetupError(400, "Choose MetaAPI, MetaTrader 5, Pass Props, Pocket Option, contracts, or mining")
     credentials = dict(account_in.get("credentials") or {})
     if method == "pocketoption" and not str(credentials.get("pocket_session_id") or "").strip():
         raise SetupError(400, "Open the Pocket Option window and sign in")
@@ -260,14 +270,15 @@ def _optional_account(db: Session, user: User, roles: list[str], account_in: dic
         raise SetupError(400, "A contract address is required")
     if method == "mining" and not str(credentials.get("mining_address") or "").strip():
         raise SetupError(400, "A mining payout address is required")
-    if method == "metaapi":
-        source = str(credentials.get("token_source") or "").strip().lower()
-        token = str(credentials.get("token") or "").strip()
+    if method in {"metaapi", "passprop"}:
+        login = str(credentials.get("login") or "").strip()
+        password = str(credentials.get("password") or "")
+        server = str(credentials.get("server") or "").strip()
         account_id = str(credentials.get("metaapi_account_id") or "").strip()
-        if not account_id:
+        if method == "metaapi" and not login and not password and not server and not account_id:
             return None, None, ""
-        if source != "default" and not token:
-            raise SetupError(400, "MetaAPI needs an account id and either the default token or your own token")
+        if not account_id and (not login or not password or not server):
+            raise SetupError(400, "MetaAPI needs the broker server, login id, and password")
     if method == "local_mt5":
         login = str(credentials.get("login") or "").strip()
         password = str(credentials.get("password") or "")

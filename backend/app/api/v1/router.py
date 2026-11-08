@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_mailer, get_principal
@@ -35,11 +36,15 @@ from app.services.account_service import (
     AccountError,
     connect_account,
     create_account,
+    delete_account,
     disconnect_account,
     ensure_rule_row,
     get_visible_account,
+    passprop_public,
+    pocket_public,
     rotate_webhook,
     set_monitoring,
+    system_overview,
     test_connection,
     update_account,
     visible_account_query,
@@ -55,6 +60,7 @@ from app.services.auth_service import (
     finish_mfa_login,
     login_user,
     logout_user,
+    public_register_allowed,
     refresh_session,
     register_user,
     request_password_reset,
@@ -134,6 +140,7 @@ class OrderIn(BaseModel):
     take_profit: Decimal | None = None
     price: Decimal | None = None
     ticket: str = ""
+    duration: int | None = None
 
 
 class AiTradeIn(BaseModel):
@@ -287,12 +294,21 @@ def _account_payload(db: Session, account) -> dict:
         "free_margin": _plain(state.free_margin if state else 0, 2),
         "margin_level": None if not state or state.margin_level is None else _plain(state.margin_level, 2),
         "stale": bool(state.stale) if state else False,
+        "today_pl": _plain(daily_pnl(state.day_start_equity, state.equity), 2) if state else "0.00",
+        "current_drawdown": _plain(current_drawdown_pct(state.peak_equity, state.equity), 2) if state else "0.00",
+        "passprop": passprop_public(db, account),
+        "pocket": pocket_public(db, account),
     }
 
 
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@router.get("/auth/register-open")
+def register_open(db: Session = Depends(get_db)):
+    return {"open": public_register_allowed(db)}
 
 
 @router.post("/auth/register")
@@ -397,21 +413,31 @@ def reset_password_route(payload: ResetIn, db: Session = Depends(get_db)):
 @router.get("/users")
 def list_users(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("users.manage")
-    users = db.scalars(select(User).where(User.organization_id == principal.user.organization_id)).all()
-    return [{"id": str(user.id), "email": user.email, "full_name": user.full_name, "roles": role_codes_for(db, user.id), "is_active": user.is_active} for user in users]
+    from app.services.admin_user_service import list_managed_users
+
+    return list_managed_users(db, principal.user, principal.roles)
 
 
 @router.post("/users")
 def add_user(payload: MemberIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("users.manage")
-    if payload.role == "SUPER_ADMIN" and "SUPER_ADMIN" not in principal.roles:
-        raise HTTPException(403, "Only a super admin can grant SUPER_ADMIN")
+    if payload.role == "SUPER_ADMIN":
+        raise HTTPException(403, "That role cannot be created")
     try:
         user = create_member(db, principal.user, email=payload.email, password=payload.password, full_name=payload.full_name, role_code=payload.role, ip=_client_ip(request))
         db.commit()
     except AuthError as exc:
         raise HTTPException(exc.status, exc.detail) from exc
     return {"id": str(user.id), "email": user.email, "roles": [payload.role]}
+
+
+@router.get("/operating-status")
+def operating_status_route(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    from app.services.expense_service import operating_status
+
+    body = operating_status(db, principal.user, principal.roles)
+    db.commit()
+    return body
 
 
 @router.get("/dashboard/summary")
@@ -426,6 +452,65 @@ def dashboard_charts(account_id: UUID | None = None, principal: Principal = Depe
     return charts(db, principal.user, principal.roles, account_id)
 
 
+class ConnectorsIn(BaseModel):
+    metaapi_token: str = ""
+    wallet: dict | None = None
+
+
+class AccountTypesIn(BaseModel):
+    enabled: dict[str, bool]
+
+
+@router.get("/system")
+def system_info(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("accounts.read")
+    return system_overview(db, principal.user)
+
+
+@router.get("/system/connectors")
+def get_connectors(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("system.configure")
+    from app.services.system_config_service import connector_status
+
+    return connector_status(db, principal.user.organization_id)
+
+
+@router.put("/system/connectors")
+def put_connectors(payload: ConnectorsIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("system.configure")
+    from app.services.system_config_service import SystemConfigError, save_connectors
+
+    try:
+        body = save_connectors(db, principal.user, payload.model_dump(), _client_ip(request))
+        db.commit()
+    except SystemConfigError as exc:
+        db.rollback()
+        raise HTTPException(exc.status, exc.detail) from exc
+    return body
+
+
+@router.get("/system/account-types")
+def get_account_types(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("system.configure")
+    from app.services.system_config_service import account_types_payload
+
+    return account_types_payload(db, principal.user.organization_id)
+
+
+@router.put("/system/account-types")
+def put_account_types(payload: AccountTypesIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("system.configure")
+    from app.services.system_config_service import SystemConfigError, save_account_types
+
+    try:
+        body = save_account_types(db, principal.user, payload.enabled, _client_ip(request))
+        db.commit()
+    except SystemConfigError as exc:
+        db.rollback()
+        raise HTTPException(exc.status, exc.detail) from exc
+    return body
+
+
 @router.get("/accounts")
 def list_accounts(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("accounts.read")
@@ -434,13 +519,21 @@ def list_accounts(principal: Principal = Depends(get_principal), db: Session = D
 
 
 @router.post("/connections/probe")
-def probe_terminal(payload: ProbeIn, principal: Principal = Depends(get_principal)):
+def probe_terminal(payload: ProbeIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("accounts.connect")
     if auth_limiter.hit(f"probe:{principal.user.id}", limit=30, window_seconds=60):
         raise HTTPException(429, "Too many connection checks")
-    if payload.connection_method not in {"metaapi", "local_mt5", "pocketoption", "blockchain", "mining"}:
-        raise HTTPException(400, "Choose MetaAPI, MetaTrader 5, Pocket Option, contracts, or mining")
-    return probe_connection(payload.connection_method, payload.credentials)
+    if payload.connection_method not in {"metaapi", "local_mt5", "passprop", "pocketoption", "blockchain", "mining"}:
+        raise HTTPException(400, "Choose MetaAPI, MetaTrader 5, Pass Props, Pocket Option, contracts, or mining")
+    from app.services.system_config_service import method_is_open, metaapi_token
+    from app.services.connection_probe import uses_metaapi
+
+    if not method_is_open(db, principal.user.organization_id, payload.connection_method):
+        raise HTTPException(400, "This account type is not available")
+    token = ""
+    if uses_metaapi(payload.connection_method):
+        token = metaapi_token(db, principal.user.organization_id)
+    return probe_connection(payload.connection_method, payload.credentials, metaapi_token=token)
 
 
 @router.post("/accounts")
@@ -457,6 +550,20 @@ def post_account(payload: AccountIn, request: Request, principal: Principal = De
     return body
 
 
+@router.delete("/accounts/{account_id}")
+def remove_account(account_id: UUID, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("accounts.write")
+    try:
+        delete_account(db, principal.user, principal.roles, account_id, _client_ip(request))
+        db.commit()
+    except AccountError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "This account still has linked records and could not be removed") from exc
+    return {"ok": True}
+
+
 @router.get("/accounts/{account_id}")
 def get_account(
     account_id: UUID,
@@ -467,7 +574,7 @@ def get_account(
     principal.require("accounts.read")
     account = _account_or_404(db, principal, account_id)
     sync_error = ""
-    if sync and account.connection_method in {"metaapi", "local_mt5"} and get_settings().environment == "test":
+    if sync and account.status not in {"disconnected", "deleted"} and account.connection_method in {"metaapi", "passprop", "local_mt5"} and get_settings().environment == "test":
         from app.services.live_trades import refresh_terminal
 
         error = refresh_terminal(db, account)
@@ -739,7 +846,7 @@ def put_channel(payload: ChannelIn, principal: Principal = Depends(get_principal
 
 @router.get("/email")
 def get_email(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.read")
+    principal.require("system.configure")
     from app.services.email_service import email_status
 
     return email_status(db, principal.user.organization_id)
@@ -747,7 +854,7 @@ def get_email(principal: Principal = Depends(get_principal), db: Session = Depen
 
 @router.put("/email")
 def put_email(payload: EmailIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("system.configure")
     from app.services.email_service import save_email_settings
 
     try:
@@ -769,7 +876,7 @@ def put_email(payload: EmailIn, principal: Principal = Depends(get_principal), d
 
 @router.post("/email/test")
 def test_email(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("system.configure")
     from app.services.email_service import email_credentials
     from app.services.mailer import Mailer
 
@@ -828,7 +935,7 @@ def audit_logs(principal: Principal = Depends(get_principal), db: Session = Depe
 
 @router.get("/integrations")
 def integrations(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("accounts.read")
+    principal.require("system.configure")
     from app.services.ai_service import integration_status
 
     return integration_status(db, principal.user.organization_id)
@@ -836,7 +943,7 @@ def integrations(principal: Principal = Depends(get_principal), db: Session = De
 
 @router.put("/ai/config")
 def ai_config(payload: AiConfigIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("ai.configure")
+    principal.require("system.configure")
     try:
         row = save_ai_config(db, principal.user.organization_id, payload.model_dump())
     except ValueError as exc:
@@ -870,7 +977,7 @@ def candles(
 ):
     principal.require("accounts.read")
     account = _account_or_404(db, principal, account_id)
-    if account.connection_method != "metaapi":
+    if account.connection_method not in {"metaapi", "passprop"}:
         raise HTTPException(400, "This connection cannot load broker candles")
     from app.connectors.metaapi import MetaApiConnector
     from app.services.account_service import load_credentials
@@ -901,15 +1008,18 @@ def save_trading_api(account_id: UUID, payload: TradingApiIn, principal: Princip
 
 @router.get("/telegram")
 def get_telegram(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.read")
     from app.services.alert_service import telegram_settings
 
-    return telegram_settings(db, principal.user.organization_id)
+    body = telegram_settings(db, principal.user.organization_id)
+    if not allows(principal.roles, "system.configure"):
+        body["app_id"] = ""
+    return body
 
 
 @router.put("/telegram")
 def put_telegram(payload: TelegramSettingsIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("system.configure")
     from app.services.alert_service import TelegramError, save_telegram_settings
 
     try:
@@ -931,7 +1041,7 @@ def put_telegram(payload: TelegramSettingsIn, principal: Principal = Depends(get
 
 @router.post("/telegram/test")
 def telegram_test(payload: TelegramTestIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("system.configure")
     from app.services.alert_service import (
         TelegramError,
         apply_telegram_test_result,
@@ -971,7 +1081,7 @@ def _telegram_result(db: Session, action):
 
 @router.post("/telegram/user/code")
 def telegram_user_code(payload: TelegramUserCodeIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.write")
     from app.services.telegram_user import request_login_code
 
     result = _telegram_result(db, lambda: request_login_code(db, principal.user.organization_id, payload.phone))
@@ -990,7 +1100,7 @@ def telegram_user_code(payload: TelegramUserCodeIn, principal: Principal = Depen
 
 @router.post("/telegram/user/confirm")
 def telegram_user_confirm(payload: TelegramUserConfirmIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.write")
     from app.services.telegram_user import confirm_login
 
     result = _telegram_result(db, lambda: confirm_login(db, principal.user.organization_id, payload.code, payload.password))
@@ -1009,7 +1119,7 @@ def telegram_user_confirm(payload: TelegramUserConfirmIn, principal: Principal =
 
 @router.delete("/telegram/user")
 def telegram_user_delete(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.write")
     from app.services.telegram_user import forget_user
 
     result = forget_user(db, principal.user.organization_id)
@@ -1028,7 +1138,7 @@ def telegram_user_delete(principal: Principal = Depends(get_principal), db: Sess
 
 @router.get("/telegram/signals")
 def telegram_signals(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.read")
     from app.services.telegram_user import list_pending_signals
 
     result = list_pending_signals(db, principal.user.organization_id)
@@ -1038,7 +1148,7 @@ def telegram_signals(principal: Principal = Depends(get_principal), db: Session 
 
 @router.put("/telegram/auto-execute")
 def telegram_auto_execute(payload: TelegramAutoExecuteIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.write")
     from app.services.alert_service import TelegramError
     from app.services.telegram_user import set_auto_execute
 
@@ -1061,7 +1171,7 @@ def telegram_auto_execute(payload: TelegramAutoExecuteIn, principal: Principal =
 
 @router.post("/telegram/signals/{signal_id}/execute")
 def telegram_signal_execute(signal_id: UUID, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.write")
     from app.services.alert_service import TelegramError
     from app.services.telegram_user import execute_pending_signal
 
@@ -1076,7 +1186,7 @@ def telegram_signal_execute(signal_id: UUID, principal: Principal = Depends(get_
 
 @router.get("/telegram/chats")
 def telegram_chats(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.read")
     from app.services.telegram_user import list_chats
 
     result = _telegram_result(db, lambda: list_chats(db, principal.user.organization_id))
@@ -1086,7 +1196,7 @@ def telegram_chats(principal: Principal = Depends(get_principal), db: Session = 
 
 @router.put("/telegram/chats")
 def telegram_chats_save(payload: TelegramChatsIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("alerts.manage")
+    principal.require("accounts.write")
     from app.services.telegram_user import save_copy_chats
 
     result = _telegram_result(db, lambda: save_copy_chats(db, principal.user.organization_id, payload.chat_ids))

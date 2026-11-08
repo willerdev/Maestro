@@ -957,6 +957,21 @@ class AssetTransfer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class OperatingCycle(Base):
+    __tablename__ = "operating_cycles"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    target: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("700"))
+    collected: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("0"))
+    last_charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class CapitalMovement(Base):
     __tablename__ = "capital_movements"
 
@@ -1092,6 +1107,17 @@ class OutboundDelivery(Base):
     last_error: Mapped[str] = mapped_column(String(400), default="")
     payload: Mapped[dict] = mapped_column(JsonDoc, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SystemConfig(Base):
+    __tablename__ = "system_configs"
+    __table_args__ = (UniqueConstraint("organization_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    secret_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    secret_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class PaymentProviderConfig(Base):

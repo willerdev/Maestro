@@ -37,6 +37,7 @@ SENSITIVE_KEYS = {
     "demo_ssid",
     "real_ssid",
     "nowpayments_payout_email",
+    "nowpayments_public_key",
 }
 
 

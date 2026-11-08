@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { armWork, pendingWork, subscribeBusy } from "@/lib/busy";
 
 function quiet(button: HTMLButtonElement) {
-  return Boolean(button.closest(".theme-toggle, .desk-menu, .desk-rail, .wallet-switch, .chart-toolbar"));
+  return Boolean(button.closest(".theme-toggle, .desk-menu, .desk-rail, .wallet-switch, .chart-toolbar, .desk-toolbar, .mode-switch"));
 }
 
 function watch(button: HTMLButtonElement) {

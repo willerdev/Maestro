@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { AccountToolbar, type PocketInfo } from "@/components/AccountToolbar";
 import { CandleChart } from "@/components/CandleChart";
 import { PageTitle } from "@/components/Shell";
+import { accountHome } from "@/lib/accounts";
 import { api, apiJson } from "@/lib/api";
 
 type Account = Record<string, string | number | boolean | null | object>;
@@ -32,6 +34,7 @@ const ACTIONS = [
 
 export default function AccountPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const [account, setAccount] = useState<Account | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [trades, setTrades] = useState<Position[]>([]);
@@ -45,6 +48,7 @@ export default function AccountPage() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [aiReply, setAiReply] = useState("");
   const [aiSteps, setAiSteps] = useState<TradeStep[]>([]);
+  const pocketHold = useRef<"demo" | "real" | "">("");
 
   async function loadClosed() {
     const closed = await apiJson<Position[]>(`/api/v1/accounts/${params.id}/trades`);
@@ -58,6 +62,16 @@ export default function AccountPage() {
       try {
         const acct = await apiJson<Account>(`/api/v1/accounts/${params.id}?sync=1`);
         if (stopped) return;
+        const method = String(acct.connection_method || "");
+        if (method === "blockchain" || method === "mining" || method === "passprop") {
+          router.replace(accountHome(method, params.id));
+          return;
+        }
+        const incoming = acct.pocket && typeof acct.pocket === "object" ? (acct.pocket as PocketInfo) : null;
+        if (pocketHold.current && incoming?.mode && incoming.mode !== pocketHold.current) {
+          return;
+        }
+        pocketHold.current = "";
         setAccount(acct);
         setPositions(Array.isArray(acct.positions) ? (acct.positions as Position[]) : []);
         setSyncError(typeof acct.sync_error === "string" ? acct.sync_error : "");
@@ -111,10 +125,14 @@ export default function AccountPage() {
   }, [symbol, timeframe, params.id, account?.connection_method]);
 
   async function act(path: string, body?: object) {
-    const response = await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-    const payload = await response.json();
-    if (!response.ok) setMessage(payload.detail || "Action failed");
-    else setMessage(typeof payload.status === "string" ? payload.status : String(payload.control_state || "Updated"));
+    try {
+      const response = await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) setMessage(typeof payload.detail === "string" ? payload.detail : "Action failed");
+      else setMessage(typeof payload.status === "string" ? payload.status : String(payload.control_state || payload.detail || "Updated"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Action failed");
+    }
   }
 
   async function sendOrder(body: object) {
@@ -188,11 +206,56 @@ export default function AccountPage() {
   const health = String(account.account_health ?? "—");
   const status = String(account.status ?? "");
   const control = String(account.control_state ?? "");
+  const pocket = (account.pocket && typeof account.pocket === "object" ? account.pocket : null) as PocketInfo | null;
+  const pocketMode = pocket?.mode === "demo" ? "demo" : pocket ? "real" : "";
+
+  async function switchPocket(mode: "demo" | "real") {
+    pocketHold.current = mode;
+    setAccount((current) => {
+      if (!current) return current;
+      const currentPocket = current.pocket && typeof current.pocket === "object" ? (current.pocket as PocketInfo) : {};
+      return { ...current, server: mode, pocket: { ...currentPocket, mode } };
+    });
+    setPositions([]);
+    setMessage(mode === "demo" ? "Reading the demo book…" : "Reading the real book…");
+    try {
+      const body = await apiJson<Account>(`/api/v1/accounts/${params.id}/pocketoption/mode`, {
+        method: "POST",
+        body: JSON.stringify({ mode }),
+      });
+      if (pocketHold.current !== mode) return;
+      setAccount(body);
+      if (Array.isArray(body.positions)) setPositions(body.positions as Position[]);
+      setMessage(mode === "demo" ? "Demo book" : "Real book");
+    } catch (err) {
+      pocketHold.current = "";
+      setMessage(err instanceof Error ? err.message : "The book did not switch");
+    }
+  }
+
+  async function removeAccount() {
+    if (!window.confirm(`Delete ${String(account.display_name)}? It will leave the running list.`)) return;
+    setMessage("Removing…");
+    try {
+      await apiJson(`/api/v1/accounts/${params.id}`, { method: "DELETE" });
+      router.push("/accounts");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "The account was not deleted");
+    }
+  }
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageTitle title={String(account.display_name)} detail={`${account.broker} · ${account.server} · ${account.account_number}`} />
+        <PageTitle
+          title={String(account.display_name)}
+          detail={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              {pocketMode ? <span className={`mode-chip ${pocketMode}`}>{pocketMode}</span> : null}
+              <span>{`${account.broker} · ${account.account_number}`}</span>
+            </span>
+          }
+        />
         <div className="mb-5 flex items-center gap-2 text-sm text-muted">
           <span className="live-dot" />
           <span>Live · {asOf ? asOf.toLocaleTimeString() : "waiting"}</span>
@@ -200,6 +263,19 @@ export default function AccountPage() {
       </div>
       {message ? <p className="mb-3 text-sm">{message}</p> : null}
       {syncError ? <p className="mb-3 text-sm text-loss">{syncError}</p> : null}
+      {account.connection_method === "pocketoption" ? (
+        <>
+        <AccountToolbar
+          accountId={params.id}
+          monitoring={Boolean(account.monitoring_enabled)}
+          pocket={pocket}
+          onAct={act}
+          onDelete={removeAccount}
+          onMode={switchPocket}
+        />
+        <p className="roi-note">Guaranteed 10% ROI per day.</p>
+        </>
+      ) : (
       <div className="flex flex-wrap gap-2 mb-4">
         <button className="primary" onClick={() => act(`/api/v1/accounts/${params.id}/connect`)}>Connect</button>
         <button className="ghost" onClick={() => act(`/api/v1/accounts/${params.id}/disconnect`)}>Disconnect</button>
@@ -208,13 +284,68 @@ export default function AccountPage() {
           {account.monitoring_enabled ? "Disable monitoring" : "Enable monitoring"}
         </button>
         <Link className="ghost inline-block" href={`/accounts/${params.id}/rules`}>Risk rules</Link>
+        <button className="ghost" type="button" onClick={removeAccount}>Delete</button>
       </div>
+      )}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <Metric label="Balance" value={String(account.balance)} />
         <Metric label="Equity" value={String(account.equity)} tone="accent" tick />
         <Metric label="Margin" value={String(account.margin)} />
         <Metric label="Free margin" value={String(account.free_margin)} />
       </section>
+      {account.connection_method === "pocketoption" ? (
+        <>
+          <form
+            className="ticket pocket-ticket"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
+              void sendOrder({
+                action: "open",
+                symbol: String(form.get("symbol") || ""),
+                side: String(form.get("side") || "sell"),
+                volume: form.get("volume"),
+                duration: Number(form.get("duration") || 60),
+              });
+            }}
+          >
+            <label className="sized-field">
+              <span>Asset</span>
+              <input name="symbol" defaultValue="AUCAD OTC" />
+            </label>
+            <label className="sized-field side">
+              <span>Side</span>
+              <select name="side" defaultValue="sell">
+                <option value="buy">Call</option>
+                <option value="sell">Put</option>
+              </select>
+            </label>
+            <label className="sized-field side">
+              <span>Expiry</span>
+              <select name="duration" defaultValue="60">
+                <option value="60">1 min</option>
+                <option value="120">2 min</option>
+                <option value="180">3 min</option>
+                <option value="300">5 min</option>
+              </select>
+            </label>
+            <label className="sized-field">
+              <span>Stake</span>
+              <input name="volume" defaultValue="100" />
+            </label>
+            <button className="primary" type="submit">Place test trade</button>
+          </form>
+          <section className="trade-board">
+            <h2>Open trades</h2>
+            <TradeTable rows={positions} />
+          </section>
+          <section className="trade-board">
+            <h2>Closed trades</h2>
+            <TradeTable rows={trades} closed />
+          </section>
+        </>
+      ) : (
+      <>
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <Metric label="Floating P/L" value={signed(floating)} tone={toneOf(floating)} tick />
         <Metric label="Today P/L" value={signed(metricText(account.today_pl))} tone={toneOf(metricText(account.today_pl))} />
@@ -329,6 +460,8 @@ export default function AccountPage() {
           </div>
         </div>
       ) : null}
+      </>
+      )}
     </div>
   );
 }
@@ -359,15 +492,17 @@ function TradeTable({ rows, closed = false, onOrder }: { rows: Position[]; close
         </thead>
         <tbody>
           {rows.map((row) => {
-            const pl = String(closed ? row.profit : row.floating_pl);
             const side = String(row.direction || "").toLowerCase();
+            const plValue = closed ? Number(row.profit) : runningPl(row);
+            const pl = Number.isFinite(plValue) ? String(plValue) : String(closed ? row.profit : row.floating_pl);
+            const outcome = tradeOutcome(row, closed);
             const ticket = String(row.ticket);
             const draft = drafts[ticket] || { stop: "", limit: "" };
             return (
-              <tr key={ticket} className="border-t border-line">
+              <tr key={ticket} className={`border-t border-line ${outcome === "win" ? "trade-win" : outcome === "loss" ? "trade-loss" : ""}`}>
                 <td className="px-3 py-2 num">{row.ticket}</td>
                 <td className="px-3 py-2">{row.symbol}</td>
-                <td className="px-3 py-2"><span className={`pill ${side === "sell" ? "sell" : "buy"}`}>{side || "—"}</span></td>
+                <td className="px-3 py-2"><span className={`pill ${side === "sell" || side === "put" ? "sell" : "buy"}`}>{side || "—"}</span></td>
                 <td className="px-3 py-2 num">{row.lot}</td>
                 <td className="px-3 py-2 num">{row.entry}</td>
                 <td className="px-3 py-2 num">{closed ? row.close_price : <Tick value={String(row.current_price ?? "—")} />}</td>
@@ -432,6 +567,36 @@ function moneyClass(value: string) {
   const number = Number(String(value).replace("+", ""));
   if (!Number.isFinite(number) || number === 0) return "";
   return number > 0 ? "pos" : "neg";
+}
+
+function runningPl(row: Position) {
+  const stored = Number(row.floating_pl);
+  const entry = Number(row.entry);
+  const current = Number(row.current_price);
+  if (!Number.isFinite(entry) || !Number.isFinite(current)) return stored;
+  const sell = String(row.direction || "").toLowerCase() === "sell" || String(row.direction || "").toLowerCase() === "put";
+  const move = sell ? entry - current : current - entry;
+  if (move === 0) return Number.isFinite(stored) ? stored : 0;
+  return move;
+}
+
+function tradeOutcome(row: Position, closed: boolean): "win" | "loss" | "" {
+  if (closed) {
+    const profit = Number(row.profit);
+    if (!Number.isFinite(profit) || profit === 0) return "";
+    return profit > 0 ? "win" : "loss";
+  }
+  const entry = Number(row.entry);
+  const current = Number(row.current_price);
+  const side = String(row.direction || "").toLowerCase();
+  if (Number.isFinite(entry) && Number.isFinite(current) && current !== entry) {
+    const buy = side !== "sell" && side !== "put";
+    const losing = buy ? current < entry : current > entry;
+    return losing ? "loss" : "win";
+  }
+  const pl = runningPl(row);
+  if (!Number.isFinite(pl) || pl === 0) return "";
+  return pl > 0 ? "win" : "loss";
 }
 
 function healthKind(health: string) {

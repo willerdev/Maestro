@@ -111,7 +111,7 @@ def investor_wallets(db: Session, user: User) -> list[dict]:
 def save_investor_wallet(db: Session, user: User, fund_id: UUID, label: str, address: str) -> dict:
     investor = _investor(db, user)
     if investor is None:
-        raise WalletError(403, "An admin has to approve you as an investor first")
+        raise WalletError(403, "Your investor application has to be approved first")
     fund = db.get(Fund, fund_id)
     if fund is None or fund.organization_id != user.organization_id or fund.status != "open":
         raise WalletError(404, "Fund not found")
@@ -141,7 +141,7 @@ def save_investor_wallet(db: Session, user: User, fund_id: UUID, label: str, add
 def investor_move(db: Session, user: User, wallet_id: UUID, direction: str, amount: Decimal, note: str = "") -> dict:
     investor = _investor(db, user)
     if investor is None:
-        raise WalletError(403, "An admin has to approve you as an investor first")
+        raise WalletError(403, "Your investor application has to be approved first")
     wallet = db.get(CustodyWallet, wallet_id)
     if wallet is None or wallet.organization_id != user.organization_id or wallet.investor_id != investor.id:
         raise WalletError(404, "Wallet not found")

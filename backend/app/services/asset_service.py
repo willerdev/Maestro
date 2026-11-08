@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from app.connectors.payments import PaymentProviderError, connector_for
 from app.core.encryption import decrypt_json
 from app.domain.audit import write_audit
-from app.models.entities import AssetTransfer, PaymentProviderConfig, User
-from app.services.payment_service import PaymentError, _callback_url, create_payment
+from app.models.entities import AssetTransfer, Organization, PaymentProviderConfig, User
+from app.services.payment_service import PaymentError, _callback_url, _public_wallet_detail, create_payment
 
 _COIN = re.compile(r"^[A-Za-z0-9]{2,20}$")
 _ADDRESS = re.compile(r"^[A-Za-z0-9]{26,128}$")
@@ -19,6 +19,7 @@ _SCALE = Decimal("0.00000001")
 _MAX = Decimal("1000000000000")
 _POSTED = {"finished", "completed", "success"}
 _FAILED = {"failed", "rejected", "expired", "refunded"}
+_HELD_WITHDRAW = {"requested", "pending", "posted"}
 
 
 class AssetError(Exception):
@@ -39,13 +40,19 @@ def asset_home(db: Session, user: User) -> dict:
 
 def request_deposit(db: Session, user: User, currency: str, amount: Decimal, ip: str, *, client: httpx.Client | None = None) -> dict:
     _nowpayments(db, user, required=True)
-    coin = _coin(currency)
+    coin = _coin(currency or "usdttrc20")
     cash = _crypto(amount)
     try:
         payment = create_payment(
             db,
             user,
-            {"price_amount": cash, "price_currency": coin, "pay_currency": coin, "purpose": "deposit", "description": f"Asset deposit {coin}"},
+            {
+                "price_amount": cash,
+                "price_currency": coin,
+                "pay_currency": coin,
+                "purpose": "deposit",
+                "description": f"USDT TRC20 deposit" if coin == "usdttrc20" else f"Asset deposit {coin}",
+            },
             ip,
             client=client,
             amount_scale=_SCALE,
@@ -80,39 +87,20 @@ def request_deposit(db: Session, user: User, currency: str, amount: Decimal, ip:
 
 
 def request_withdrawal(db: Session, user: User, currency: str, amount: Decimal, address: str, ip: str, *, client: httpx.Client | None = None) -> dict:
-    config = _nowpayments(db, user, required=True)
+    _nowpayments(db, user, required=True)
     coin = _coin(currency)
     cash = _crypto(amount)
     destination = _address(address)
     if cash > _available(db, user, coin):
         raise AssetError(400, "That is more than this asset has available")
-    connector = connector_for("nowpayments")
-    credentials = decrypt_json(config.secret_nonce, config.secret_ciphertext)
-    try:
-        payout = connector.create_payout(
-            credentials,
-            sandbox=config.sandbox,
-            address=destination,
-            currency=coin,
-            amount=cash,
-            callback_url=_callback_url(config),
-            client=client,
-        )
-    except PaymentProviderError as exc:
-        raise AssetError(exc.status, exc.detail) from exc
-    state = _payout_state(str(payout.get("provider_status") or ""))
-    if state == "failed":
-        raise AssetError(502, "NOWPayments rejected the payout")
     row = AssetTransfer(
         organization_id=user.organization_id,
         user_id=user.id,
         currency=coin,
         direction="withdraw",
         amount=cash,
-        status="posted" if state == "posted" else "pending",
+        status="requested",
         address=destination,
-        provider_id=str(payout.get("provider_id") or ""),
-        order_id=str(payout.get("batch_id") or ""),
     )
     db.add(row)
     db.flush()
@@ -127,6 +115,78 @@ def request_withdrawal(db: Session, user: User, currency: str, amount: Decimal, 
         ip_address=ip,
     )
     return _payload(row)
+
+
+def list_withdrawal_requests(db: Session, actor: User, roles: list[str]) -> list[dict]:
+    query = select(AssetTransfer).where(AssetTransfer.direction == "withdraw").order_by(AssetTransfer.created_at.desc()).limit(200)
+    if "SUPER_ADMIN" not in roles:
+        query = query.where(AssetTransfer.organization_id == actor.organization_id)
+    rows = list(db.scalars(query).all())
+    rows.sort(key=lambda row: (0 if row.status == "requested" else 1 if row.status == "pending" else 2, row.created_at))
+    users = _users_by_id(db, {row.user_id for row in rows})
+    orgs = _org_names(db, {row.organization_id for row in rows})
+    return [_admin_payload(row, users.get(row.user_id), orgs.get(row.organization_id, "")) for row in rows]
+
+
+def approve_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, ip: str, *, client: httpx.Client | None = None) -> dict:
+    row = _managed_withdrawal(db, actor, roles, transfer_id)
+    if row.status != "requested":
+        raise AssetError(400, "That request is not waiting for approval")
+    owner = db.get(User, row.user_id)
+    if owner is None:
+        raise AssetError(404, "The user for this request is gone")
+    config = _nowpayments_org(db, row.organization_id, required=True)
+    connector = connector_for("nowpayments")
+    credentials = decrypt_json(config.secret_nonce, config.secret_ciphertext)
+    try:
+        payout = connector.create_payout(
+            credentials,
+            sandbox=config.sandbox,
+            address=row.address,
+            currency=row.currency,
+            amount=row.amount,
+            callback_url=_callback_url(config),
+            client=client,
+        )
+    except PaymentProviderError as exc:
+        raise AssetError(exc.status, _public_wallet_detail(exc.detail)) from exc
+    state = _payout_state(str(payout.get("provider_status") or ""))
+    if state == "failed":
+        raise AssetError(502, "The payout was rejected")
+    row.provider_id = str(payout.get("provider_id") or "")
+    row.order_id = str(payout.get("batch_id") or "")
+    row.status = "posted" if state == "posted" else "pending"
+    write_audit(
+        db,
+        organization_id=row.organization_id,
+        actor_user_id=actor.id,
+        action="asset_withdrawal_approved",
+        entity_type="asset_transfer",
+        entity_id=str(row.id),
+        after={"status": row.status, "amount": format(row.amount, "f"), "address": row.address},
+        ip_address=ip,
+    )
+    return _admin_payload(row, owner)
+
+
+def reject_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, note: str, ip: str) -> dict:
+    row = _managed_withdrawal(db, actor, roles, transfer_id)
+    if row.status != "requested":
+        raise AssetError(400, "That request is not waiting for approval")
+    owner = db.get(User, row.user_id)
+    row.status = "rejected"
+    row.note = str(note or "").strip()[:240]
+    write_audit(
+        db,
+        organization_id=row.organization_id,
+        actor_user_id=actor.id,
+        action="asset_withdrawal_rejected",
+        entity_type="asset_transfer",
+        entity_id=str(row.id),
+        after={"status": "rejected", "note": row.note},
+        ip_address=ip,
+    )
+    return _admin_payload(row, owner)
 
 
 def settle_asset_deposit(db: Session, organization_id, order_id: str, status: str, body: dict) -> None:
@@ -146,7 +206,7 @@ def settle_asset_deposit(db: Session, organization_id, order_id: str, status: st
         return
     received = _received(body)
     if received is None or received <= 0:
-        row.note = "NOWPayments marked this paid without a crypto amount"
+        row.note = "Payment was marked paid without a crypto amount"
         return
     row.amount = received
     coin = str(body.get("pay_currency") or body.get("payer_currency") or row.currency).strip().lower()
@@ -217,7 +277,13 @@ def _available(db: Session, user: User, currency: str) -> Decimal:
     for row in rows:
         if row.direction == "deposit" and row.status == "posted":
             total += row.amount
-        elif row.direction == "withdraw" and row.status in {"posted", "pending"}:
+        elif row.direction == "withdraw" and row.status in _HELD_WITHDRAW:
+            total -= row.amount
+        elif row.direction == "expense" and row.status == "posted":
+            total -= row.amount
+        elif row.direction == "mining_upgrade" and row.status == "posted":
+            total -= row.amount
+        elif row.direction == "contract" and row.status == "hold":
             total -= row.amount
     return total
 
@@ -247,19 +313,66 @@ def _payload(row: AssetTransfer) -> dict:
     }
 
 
+def _admin_payload(row: AssetTransfer, user: User | None, organization: str = "") -> dict:
+    body = _payload(row)
+    body.update(
+        {
+            "user_id": str(row.user_id),
+            "email": user.email if user else "",
+            "full_name": user.full_name if user else "",
+            "organization": organization,
+        }
+    )
+    return body
+
+
+def _managed_withdrawal(db: Session, actor: User, roles: list[str], transfer_id) -> AssetTransfer:
+    row = db.get(AssetTransfer, transfer_id)
+    if row is None or row.direction != "withdraw":
+        raise AssetError(404, "Withdrawal not found")
+    if "SUPER_ADMIN" not in roles and row.organization_id != actor.organization_id:
+        raise AssetError(404, "Withdrawal not found")
+    return row
+
+
+def _users_by_id(db: Session, ids: set) -> dict:
+    if not ids:
+        return {}
+    return {row.id: row for row in db.scalars(select(User).where(User.id.in_(ids))).all()}
+
+
+def _org_names(db: Session, ids: set) -> dict:
+    if not ids:
+        return {}
+    return {row.id: row.name for row in db.scalars(select(Organization).where(Organization.id.in_(ids))).all()}
+
+
 def _nowpayments(db: Session, user: User, *, required: bool) -> PaymentProviderConfig | None:
-    row = db.scalar(select(PaymentProviderConfig).where(PaymentProviderConfig.organization_id == user.organization_id))
+    return _nowpayments_org(db, user.organization_id, required=required)
+
+
+def _nowpayments_org(db: Session, organization_id, *, required: bool) -> PaymentProviderConfig | None:
+    row = db.scalar(select(PaymentProviderConfig).where(PaymentProviderConfig.organization_id == organization_id))
     if row is None or not row.enabled or row.provider != "nowpayments":
         if required:
-            raise AssetError(400, "Connect NOWPayments before moving crypto assets")
+            raise AssetError(400, "The default wallet is not ready")
         return None
     return row
 
 
+_COIN_ALIASES = {
+    "usdt": "usdttrc20",
+    "trc20": "usdttrc20",
+    "usdttrc20": "usdttrc20",
+    "usdttrct20": "usdttrc20",
+}
+
+
 def _coin(value: str) -> str:
-    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+    text = _COIN_ALIASES.get(text, text or "usdttrc20")
     if _COIN.fullmatch(text) is None:
-        raise AssetError(400, "Enter the crypto ticker, such as btc or usdttrc20")
+        raise AssetError(400, "Enter the crypto ticker, such as USDT TRC20")
     return text
 
 

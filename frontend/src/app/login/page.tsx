@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { apiJson, saveSession } from "@/lib/api";
 import { homeFor } from "@/components/Shell";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -11,6 +11,13 @@ export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState("");
   const [mfaToken, setMfaToken] = useState("");
+  const [registerOpen, setRegisterOpen] = useState(false);
+
+  useEffect(() => {
+    apiJson<{ open: boolean }>("/api/v1/auth/register-open")
+      .then((body) => setRegisterOpen(Boolean(body.open)))
+      .catch(() => setRegisterOpen(false));
+  }, []);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,7 +64,7 @@ export default function LoginPage() {
         <button className="primary" type="submit">{mfaToken ? "Confirm code" : "Enter desk"}</button>
       </form>
       <div className="text-sm text-muted mt-4 flex flex-wrap gap-3 justify-between">
-        <Link href="/register">Create a firm</Link>
+        {registerOpen ? <Link href="/register">Create a firm</Link> : null}
         <Link href="/join">Apply to join</Link>
         <Link href="/forgot-password">Reset password</Link>
         <Link href="/account-recovery">Lost the account</Link>

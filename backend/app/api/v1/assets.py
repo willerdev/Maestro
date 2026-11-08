@@ -16,7 +16,7 @@ router = APIRouter()
 
 
 class DepositIn(BaseModel):
-    currency: str
+    currency: str = "usdttrc20"
     amount: Decimal
 
 
@@ -29,7 +29,7 @@ class WithdrawIn(BaseModel):
 def _allow(principal: Principal) -> None:
     if allows(principal.roles, "payments.manage") or allows(principal.roles, "portal.investor"):
         return
-    raise HTTPException(403, "Assets are available to the super admin and approved investors")
+    raise HTTPException(403, "Assets are available to the desk owner and approved investors")
 
 
 def _fail(exc: AssetError) -> None:

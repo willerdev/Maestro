@@ -1,5 +1,5 @@
 from app.models.base import Base
-from app.models.chain_entities import ChainBlockRow, ChainHit, ChainNode, ChainSessionRow, ChainTxRow, ChainWallet
+from app.models.chain_entities import ChainBlockRow, ChainConversion, ChainConversionSettings, ChainHit, ChainNode, ChainRateChange, ChainSessionRow, ChainTxRow, ChainWallet, ContractSettings, ContractStake, ContractYield, ExtraWalletRow, MiningPlan, MiningRewardLedger, MiningSettings, MiningUpgradePayment, UserMiningUpgrade
 from app.models.entities import (
     Account,
     AssetTransfer,
@@ -44,6 +44,7 @@ from app.models.entities import (
     NavRecord,
     Notification,
     NotificationDelivery,
+    OperatingCycle,
     OrderRow,
     Organization,
     OutboundDelivery,
@@ -66,6 +67,7 @@ from app.models.entities import (
     Strategy,
     StrategyAccount,
     SymbolSpecRow,
+    SystemConfig,
     SystemEvent,
     PendingSignal,
     TelegramConfig,

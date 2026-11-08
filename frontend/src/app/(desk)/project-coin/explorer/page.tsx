@@ -60,7 +60,7 @@ export default function ExplorerPage() {
 
   return (
     <div className="max-w-5xl">
-      <PageTitle title="Block explorer" detail="Blocks on this server's Project Coin chain, newest first. A search can use a height, a block hash, a transaction hash, or a wallet address." />
+      <PageTitle title="Block explorer" detail="This server's Project Coin chain, newest first. Search a height, block hash, transaction hash, or wallet address." />
       <p className="text-sm mb-3"><Link className="text-accent" href="/project-coin">Back to mining</Link></p>
       {error ? <p className="text-loss mb-3">{error}</p> : null}
       <form className="flex gap-2 mb-4" onSubmit={onSearch}>
@@ -84,6 +84,9 @@ export default function ExplorerPage() {
             <th>Hash</th>
             <th>Miner</th>
             <th>Reward</th>
+            <th>Difficulty</th>
+            <th>Nonce</th>
+            <th>When</th>
             <th>Txs</th>
           </tr>
         </thead>
@@ -94,10 +97,13 @@ export default function ExplorerPage() {
               <td className="num break-all">{block.hash.slice(0, 18)}…</td>
               <td className="num break-all">{block.miner}</td>
               <td className="num">{block.reward}</td>
+              <td>{block.difficulty}</td>
+              <td className="num">{block.nonce}</td>
+              <td>{block.timestamp ? new Date(block.timestamp * 1000).toLocaleString() : "—"}</td>
               <td>{block.transactions}</td>
             </tr>
           ))}
-          {blocks.length === 0 ? <tr><td className="px-3 py-3 text-muted" colSpan={5}>No blocks yet.</td></tr> : null}
+          {blocks.length === 0 ? <tr><td className="px-3 py-3 text-muted" colSpan={8}>No blocks yet.</td></tr> : null}
         </tbody>
       </table>
     </div>

@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _ORG_LOCKS: dict[str, threading.Lock] = {}
 _CONTROLS: dict[tuple[str, str], MinerControl] = {}
+_CPU_PREF: dict[tuple[str, str], int] = {}
 _CONTROL_LOCK = threading.Lock()
 
 
@@ -218,15 +219,36 @@ def wallet_view(db: Session, org_id, user_id) -> dict:
     balances, _, minted = ledger.state()
     totals = ledger.totals(row.address)
     params = ledger.params
+    from app.services.conversion_service import pcoin_hold, usdt_balance, public_settings
+    from app.chain.convert import format_usdt
+
+    held = pcoin_hold(db, org_id, user_id)
+    from app.services.mining_plan_service import bonus_available
+
+    bonus = bonus_available(db, org_id, user_id)
+    spendable = max(0, ledger.available(row.address) - held + bonus)
+    rules = public_settings(db, org_id)
     return {
         "address": row.address,
         "public_key": row.public_key,
-        "available": format_amount(ledger.available(row.address)),
+        "available": format_amount(spendable),
         "confirmed": format_amount(balances.get(row.address, 0)),
         "pending": format_amount(ledger.pending_incoming(row.address)),
-        "mined": format_amount(totals["mined"]),
+        "mined": format_amount(totals["mined"] + bonus),
         "received": format_amount(totals["received"]),
         "sent": format_amount(totals["sent"]),
+        "withdrawn": format_amount(totals["sent"]),
+        "lifetime_earnings": format_amount(totals["mined"] + bonus),
+        "pending_rewards": "0",
+        "premium_available": format_amount(bonus),
+        "pow_mined": format_amount(totals["mined"]),
+        "market_value": None,
+        "converted": format_amount(held),
+        "usdt_available": format_usdt(usdt_balance(db, org_id, user_id)),
+        "usdt_total": format_usdt(usdt_balance(db, org_id, user_id)),
+        "exchange_rate": rules["rate"],
+        "exchange_label": rules["label"],
+        "confirmation_rule": "A mining reward is spendable once its block is accepted. Converted PCoin is reserved and cannot be sent.",
         "symbol": params.symbol,
         "coin": _params_row(params),
         "circulating": format_amount(minted),
@@ -275,13 +297,19 @@ def export_wallet(db: Session, org_id, user_id) -> dict:
 def send_coins(db: Session, org_id, user_id, recipient: str, amount: str) -> dict:
     row = _require_wallet(db, org_id, user_id)
     if not ADDRESS.match(recipient):
-        raise ChainServiceError(400, "The recipient address is invalid")
+        raise ChainServiceError(400, "Enter a Project Coin address that starts with pcoin1")
+    if recipient == row.address:
+        raise ChainServiceError(400, "You cannot send PCoin to your own address")
     try:
         units = parse_amount(amount)
     except ValueError as exc:
         raise ChainServiceError(400, str(exc)) from exc
     with _lock(org_id):
         ledger = load_ledger(db, org_id)
+        from app.services.conversion_service import pcoin_hold
+
+        if units + ledger.params.fee > max(0, ledger.available(row.address) - pcoin_hold(db, org_id, user_id)):
+            raise ChainServiceError(400, "The PCoin balance is too low")
         secret = decrypt_json(row.key_nonce, row.key_ciphertext)
         private = str(secret.get("private_key") or "")
         try:
@@ -395,7 +423,7 @@ def network_status(db: Session, org_id) -> dict:
     return {
         "mode": "single-node",
         "decentralized": False,
-        "detail": "This chain runs on this Maestro server. It is not a public network.",
+        "detail": "Project Coin runs on this Maestro server. This computer is the only node.",
         "node_id": node_key,
         "peers": [],
         "height": ledger.height(),
@@ -433,11 +461,14 @@ def _public_transfer(tx: Transfer, height: int | None, confirmations: int) -> di
         "block_height": height,
         "confirmations": confirmations,
         "status": "confirmed" if height is not None else "pending",
+        "timestamp": None,
     }
 
 
 def _public_transactions(block: Block, confirmations: int = 1) -> list[dict]:
     rows = [_public_transfer(tx, block.index, confirmations) for tx in block.transfers]
+    for row in rows:
+        row["timestamp"] = block.timestamp
     if block.reward_tx is not None:
         rows.append(
             {
@@ -451,6 +482,7 @@ def _public_transactions(block: Block, confirmations: int = 1) -> list[dict]:
                 "block_height": block.index,
                 "confirmations": confirmations,
                 "status": "confirmed",
+                "timestamp": block.timestamp,
             }
         )
     return rows
@@ -471,6 +503,15 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
         return None
     db = SessionLocal()
     try:
+        from app.services.mining_plan_service import mining_paused
+
+        if mining_paused(db, org_id):
+            time.sleep(1)
+            return None
+    finally:
+        db.close()
+    db = SessionLocal()
+    try:
         wallet = _require_wallet(db, org_id, user_id)
         address = wallet.address
         with _lock(org_id):
@@ -480,7 +521,7 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
         return None
     finally:
         db.close()
-    found, hashes = mine_in_process(block, cpu, stop, pause)
+    found, hashes = mine_in_process(block, control.cpu_percent, stop, pause)
     control.note_hashes(hashes)
     if found is None or stop.is_set() or pause.is_set():
         return None
@@ -511,9 +552,16 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
 
 
 def start_mining(db: Session, org_id, user_id, cpu_percent: int | None) -> dict:
+    from app.services.mining_plan_service import MiningPlanError, arm_accrual, assert_mining_allowed
+
+    try:
+        assert_mining_allowed(db, org_id)
+    except MiningPlanError as exc:
+        raise ChainServiceError(exc.status, exc.detail) from exc
     _require_wallet(db, org_id, user_id)
-    cpu = _clamp_cpu(cpu_percent)
     key = _control_key(org_id, user_id)
+    cpu = _clamp_cpu(cpu_percent if cpu_percent is not None else _CPU_PREF.get(key))
+    _CPU_PREF[key] = cpu
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
         if control is None or control.status == "stopped":
@@ -521,13 +569,18 @@ def start_mining(db: Session, org_id, user_id, cpu_percent: int | None) -> dict:
             _CONTROLS[key] = control
             control.start()
             db.add(ChainSessionRow(organization_id=org_id, user_id=user_id, status="running", difficulty=coin_params().difficulty, cpu_percent=cpu))
+            arm_accrual(db, org_id, user_id)
             db.commit()
         elif control.status == "paused":
             control.resume()
+            arm_accrual(db, org_id, user_id)
     return mining_status(db, org_id, user_id)
 
 
 def stop_mining(db: Session, org_id, user_id) -> dict:
+    from app.services.mining_plan_service import flush_accrual
+
+    flush_accrual(db, org_id, user_id)
     key = _control_key(org_id, user_id)
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
@@ -543,6 +596,9 @@ def pause_mining(db: Session, org_id, user_id) -> dict:
         control = _CONTROLS.get(key)
     if control is None or control.status == "stopped":
         raise ChainServiceError(409, "Mining is not running")
+    from app.services.mining_plan_service import flush_accrual
+
+    flush_accrual(db, org_id, user_id)
     control.pause()
     return mining_status(db, org_id, user_id)
 
@@ -553,7 +609,10 @@ def resume_mining(db: Session, org_id, user_id) -> dict:
         control = _CONTROLS.get(key)
     if control is None or control.status != "paused":
         raise ChainServiceError(409, "Mining is not paused")
+    from app.services.mining_plan_service import arm_accrual
+
     control.resume()
+    arm_accrual(db, org_id, user_id)
     return mining_status(db, org_id, user_id)
 
 
@@ -566,6 +625,9 @@ def _close_session(db: Session, org_id, user_id, status: str) -> None:
 
 
 def mining_status(db: Session, org_id, user_id) -> dict:
+    from app.services.mining_plan_service import accrue_user, hybrid_overview
+
+    accrue_user(db, org_id, user_id)
     ledger = load_ledger(db, org_id)
     wallet = _wallet(db, org_id, user_id)
     key = _control_key(org_id, user_id)
@@ -588,13 +650,15 @@ def mining_status(db: Session, org_id, user_id) -> dict:
         "failed": control.failed if control else 0,
         "blocks_mined": blocks_mined,
         "rewards": format_amount(totals["mined"]),
-        "cpu_percent": control.cpu_percent if control else 0,
+        "cpu_percent": control.cpu_percent if control is not None and control.status != "stopped" else _CPU_PREF.get(key, get_settings().chain_cpu_percent),
         "last_block_hash": latest.block_hash() if latest else "",
         "last_reward": format_amount(latest.reward_tx.amount) if latest and latest.reward_tx else "0",
         "network_hashrate": round(control.hashrate, 2) if control else 0,
         "network_scope": "this-node-only",
         "symbol": ledger.params.symbol,
         "coin": _params_row(ledger.params),
+        "hashrate_samples": list(control.samples) if control else [],
+        "hybrid": hybrid_overview(db, org_id, user_id),
     }
 
 
@@ -608,6 +672,140 @@ def mining_statistics(db: Session, org_id, user_id) -> dict:
     sessions = list(db.scalars(select(ChainSessionRow).where(ChainSessionRow.organization_id == org_id, ChainSessionRow.user_id == user_id).order_by(ChainSessionRow.started_at.desc()).limit(10)))
     status["sessions"] = [{"status": row.status, "cpu_percent": row.cpu_percent, "started_at": row.started_at.isoformat(), "stopped_at": row.stopped_at.isoformat() if row.stopped_at else None} for row in sessions]
     return status
+
+
+def set_cpu(db: Session, org_id, user_id, cpu_percent: int) -> dict:
+    cpu = _clamp_cpu(cpu_percent)
+    key = _control_key(org_id, user_id)
+    with _CONTROL_LOCK:
+        _CPU_PREF[key] = cpu
+        control = _CONTROLS.get(key)
+    if control is not None:
+        control.cpu_percent = cpu
+    return mining_status(db, org_id, user_id)
+
+
+def _span_start(span: str) -> int | None:
+    now = int(time.time())
+    if span == "24h":
+        return now - 24 * 3600
+    if span == "7d":
+        return now - 7 * 24 * 3600
+    if span == "30d":
+        return now - 30 * 24 * 3600
+    return None
+
+
+def _activity_rows(ledger: Ledger, address: str) -> list[dict]:
+    rows: list[dict] = []
+    for block in ledger.blocks:
+        for item in _public_transactions(block, confirmations=ledger.height() - block.index + 1):
+            if item["kind"] == "reward" and item["recipient"] == address:
+                item["type"] = "mining_reward"
+                rows.append(item)
+            elif item["kind"] == "transfer" and item["recipient"] == address:
+                item["type"] = "incoming"
+                rows.append(item)
+            elif item["kind"] == "transfer" and item["sender"] == address:
+                item["type"] = "outgoing"
+                rows.append(item)
+                if item["fee"] != "0":
+                    fee = dict(item)
+                    fee["type"] = "network_fee"
+                    fee["amount"] = item["fee"]
+                    rows.append(fee)
+    for tx in ledger.pending:
+        if tx.sender != address and tx.recipient != address:
+            continue
+        item = _public_transfer(tx, None, 0)
+        item["type"] = "outgoing" if tx.sender == address else "incoming"
+        rows.append(item)
+    rows.reverse()
+    return rows
+
+
+def account_activity(db: Session, org_id, user_id, span: str = "all", kind: str = "all", query: str = "", limit: int = 25, offset: int = 0) -> dict:
+    row = _require_wallet(db, org_id, user_id)
+    ledger = load_ledger(db, org_id)
+    start = _span_start(span)
+    text = query.strip().lower()
+    matched = []
+    for item in _activity_rows(ledger, row.address):
+        if kind != "all" and item.get("type") != kind:
+            continue
+        if start is not None and item.get("timestamp") not in (None, 0) and int(item["timestamp"]) < start:
+            continue
+        blob = f"{item.get('tx_hash','')} {item.get('sender','')} {item.get('recipient','')}".lower()
+        if text and text not in blob:
+            continue
+        matched.append(item)
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    return {"total": len(matched), "items": matched[offset:offset + limit]}
+
+
+def dashboard(db: Session, org_id, user_id, span: str = "all") -> dict:
+    wallet = _wallet(db, org_id, user_id)
+    status = mining_status(db, org_id, user_id)
+    ledger = load_ledger(db, org_id)
+    address = wallet.address if wallet is not None else ""
+    view = None
+    if wallet is not None:
+        view = wallet_view(db, org_id, user_id)
+    start = _span_start(span)
+    rewards = []
+    balance_points = []
+    daily: dict[str, int] = {}
+    running = 0
+    for block in ledger.blocks:
+        delta = 0
+        if address and block.reward_tx is not None and block.reward_tx.recipient == address:
+            delta += block.reward_tx.amount
+        for tx in block.transfers:
+            if not address:
+                break
+            if tx.recipient == address:
+                delta += tx.amount
+            if tx.sender == address:
+                delta -= tx.amount + tx.fee
+        running += delta
+        if start is not None and block.timestamp < start:
+            continue
+        balance_points.append({"t": block.timestamp, "balance": format_amount(running)})
+        if address and block.miner == address and block.reward_tx is not None:
+            rewards.append(
+                {
+                    "height": block.index,
+                    "hash": block.block_hash(),
+                    "miner": block.miner,
+                    "reward": format_amount(block.reward_tx.amount),
+                    "subsidy": format_amount(block.reward),
+                    "timestamp": block.timestamp,
+                    "status": "confirmed",
+                    "tx_hash": block.reward_tx.tx_hash(),
+                    "confirmations": ledger.height() - block.index + 1,
+                }
+            )
+            day = datetime.fromtimestamp(block.timestamp, timezone.utc).date().isoformat()
+            daily[day] = daily.get(day, 0) + 1
+    samples = [point for point in status.get("hashrate_samples", []) if start is None or point["t"] >= start]
+    return {
+        "span": span if span in {"24h", "7d", "30d", "all"} else "all",
+        "market_value": None,
+        "market_value_label": "unavailable",
+        "network_mode": "single-node",
+        "network_detail": "Project Coin runs on this Maestro server. This computer is the only node.",
+        "wallet": view,
+        "mining": status,
+        "hybrid": status.get("hybrid"),
+        "rewards": list(reversed(rewards))[:50],
+        "series": {
+            "rewards": [{"t": item["timestamp"], "amount": item["reward"]} for item in rewards],
+            "hashrate": samples,
+            "blocks_per_day": [{"day": day, "count": daily[day]} for day in sorted(daily)],
+            "balance": balance_points,
+        },
+    }
 
 
 def sync_chain(local: Ledger, remote: Ledger) -> Ledger:

@@ -26,7 +26,7 @@ export default function PendingPage() {
 
   return (
     <PortalFrame title="Application">
-      <h1 className="text-2xl font-semibold mb-2">{status === "rejected" ? "Application was not approved" : "Waiting for an admin"}</h1>
+      <h1 className="text-2xl font-semibold mb-2">{status === "rejected" ? "Application was not approved" : "Waiting for review"}</h1>
       <p className="text-sm text-muted">
         {kind === "trader" ? "Your trader application" : "Your investor application"} is {status}. The desk does not open a book or record units until someone approves it.
       </p>

@@ -43,7 +43,7 @@ class PaymentCreateIn(BaseModel):
 
 @router.get("/payments/provider")
 def get_provider(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    principal.require("payments.manage")
+    principal.require("accounts.read")
     return provider_status(db, principal.user.organization_id)
 
 
@@ -54,7 +54,7 @@ def put_provider(
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ):
-    principal.require("payments.manage")
+    principal.require("system.configure")
     if auth_limiter.hit(f"pay-provider:{principal.user.id}", limit=10, window_seconds=60):
         raise HTTPException(429, "Too many payment provider checks")
     try:

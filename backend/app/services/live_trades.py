@@ -16,12 +16,15 @@ _sync_errors: dict[str, str] = {}
 
 
 def terminal_accounts(db: Session) -> list[Account]:
-    accounts = db.scalars(select(Account).where(Account.connection_method.in_(["metaapi", "local_mt5"]))).all()
+    accounts = db.scalars(select(Account).where(Account.connection_method.in_(["metaapi", "passprop", "local_mt5", "pocketoption"]))).all()
     live: list[Account] = []
     for account in accounts:
+        if account.status in {"disconnected", "deleted"}:
+            continue
         link = db.scalar(select(AccountConnection).where(AccountConnection.account_id == account.id))
-        if link is not None and link.last_success_at is not None:
-            live.append(account)
+        if link is None or link.last_success_at is None or link.status == "disconnected":
+            continue
+        live.append(account)
     return live
 
 
@@ -69,7 +72,7 @@ def connected_accounts(db: Session, user: User, roles: list[str]) -> list[Accoun
     connected: list[Account] = []
     for account in accounts:
         link = db.scalar(select(AccountConnection).where(AccountConnection.account_id == account.id))
-        if account.connection_method in {"metaapi", "local_mt5"} and link is not None and link.last_success_at is not None:
+        if account.connection_method in {"metaapi", "passprop", "local_mt5", "pocketoption"} and link is not None and link.last_success_at is not None:
             connected.append(account)
             continue
         if account.status == "connected" or (link is not None and link.status == "connected"):
@@ -89,11 +92,45 @@ def refresh_open_trades(db: Session, accounts: list[Account]) -> list[dict]:
     return errors
 
 
+_pocket_at: dict[str, float] = {}
+_pocket_paused: set[str] = set()
+
+
+def clear_pocket_throttle(account_id) -> None:
+    key = str(account_id)
+    _pocket_at.pop(key, None)
+    _pocket_paused.discard(key)
+
+
+def pause_pocket_refresh(account_id) -> None:
+    _pocket_paused.add(str(account_id))
+
+
+def _refresh_blocked(db: Session | None, account: Account) -> bool:
+    if str(account.id) in _pocket_paused:
+        return True
+    if account.status in {"disconnected", "deleted"}:
+        return True
+    if db is None:
+        return False
+    status = db.scalar(select(Account.status).where(Account.id == account.id))
+    return status is None or status in {"disconnected", "deleted"}
+
+
 def refresh_terminal(db: Session, account: Account) -> dict | None:
     """Read open trades and account equity from one terminal. A failed read leaves the stored book unchanged."""
     if account.connection_method in {"webhook", "blockchain", "mining"}:
         return None
+    if _refresh_blocked(db, account):
+        return None
     key = str(account.id)
+    if account.connection_method == "pocketoption":
+        import time
+
+        now = time.monotonic()
+        if now - _pocket_at.get(key, 0) < 15:
+            return None
+        _pocket_at[key] = now
     connector = connector_for(account.connection_method)
     fetch = getattr(connector, "fetch_positions", None)
     if fetch is None:
@@ -107,6 +144,8 @@ def refresh_terminal(db: Session, account: Account) -> dict | None:
         detail = _safe_detail(exc)
         _sync_errors[key] = detail
         return {"account_id": key, "account": account.display_name, "detail": detail}
+    if _refresh_blocked(db, account):
+        return None
     _sync_errors.pop(key, None)
     _replace_open_book(db, account, positions)
     fetch_account = getattr(connector, "fetch_account", None)
@@ -115,11 +154,36 @@ def refresh_terminal(db: Session, account: Account) -> dict | None:
             info = fetch_account(credentials)
         except Exception:  # noqa: BLE001
             info = None
-        if info is not None:
+        if info is not None and not _refresh_blocked(db, account):
             _apply_live_state(db, account, info)
+            if account.connection_method == "pocketoption":
+                _remember_pocket_live(db, account, credentials, info)
+    if _refresh_blocked(db, account):
+        return None
     _mark_terminal_alive(db, account)
     account.last_sync_at = datetime.now(timezone.utc)
     return None
+
+
+def _remember_pocket_live(db: Session, account: Account, credentials: dict, info) -> None:
+    from app.core.encryption import encrypt_json
+    from app.models.entities import AccountCredential
+
+    mode = str(credentials.get("active_mode") or account.server or "").strip().lower()
+    if mode not in {"demo", "real"}:
+        mode = "real"
+    creds = dict(credentials)
+    creds["active_mode"] = mode
+    creds[f"{mode}_balance"] = f"{info.balance:.2f}"
+    creds[f"{mode}_currency"] = str(info.currency or creds.get(f"{mode}_currency") or "USD")
+    nonce, ciphertext = encrypt_json(creds)
+    row = db.scalar(select(AccountCredential).where(AccountCredential.account_id == account.id))
+    if row is None:
+        db.add(AccountCredential(account_id=account.id, nonce=nonce, ciphertext=ciphertext))
+        return
+    row.nonce = nonce
+    row.ciphertext = ciphertext
+    row.rotated_at = datetime.now(timezone.utc)
 
 
 def _apply_live_state(db: Session, account: Account, info) -> None:

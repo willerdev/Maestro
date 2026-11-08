@@ -16,6 +16,10 @@ export type User = {
   roles: string[];
 };
 
+export function isSystemAdmin(roles?: string[]) {
+  return Boolean(roles?.includes("SUPER_ADMIN") || roles?.includes("ADMIN"));
+}
+
 function accessToken(): string | null {
   if (typeof window === "undefined") return null;
   return sessionStorage.getItem("tg_access");

@@ -60,7 +60,7 @@ export default function TraderPortal() {
         </p>
       ) : <p className="text-sm text-muted mb-4">Your profile is not on a book yet.</p>}
       {message ? <p className="text-sm mb-4">{message}</p> : null}
-      {accounts.length === 0 ? <p className="text-sm">An admin has not assigned an account. You cannot see or send trades until they do.</p> : null}
+      {accounts.length === 0 ? <p className="text-sm">No account has been assigned yet. You cannot see or send trades until one is assigned.</p> : null}
       {accounts.map((account) => (
         <article key={account.id} className="border border-line bg-panel rounded p-3 mb-3">
           <div className="flex justify-between gap-3"><span>{account.name}</span><span className="num">{account.equity ?? "No equity"} {account.currency} · {account.control_state}</span></div>

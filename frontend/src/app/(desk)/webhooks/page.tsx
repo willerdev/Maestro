@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { PageTitle } from "@/components/Shell";
+import { accountHome } from "@/lib/accounts";
 import { apiJson } from "@/lib/api";
 
 type Account = { id: string; display_name: string; account_number: string; connection_method: string; status: string };
@@ -22,7 +23,7 @@ export default function WebhooksPage() {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id} className="border-t border-line">
-              <td className="px-3 py-2"><Link className="text-accent" href={`/accounts/${row.id}`}>{row.display_name}</Link></td>
+              <td className="px-3 py-2"><Link className="text-accent" href={accountHome(row.connection_method, row.id)}>{row.display_name}</Link></td>
               <td className="px-3 py-2 num">{row.account_number}</td>
               <td className="px-3 py-2">{row.connection_method}</td>
               <td className="px-3 py-2">{row.status}</td>

@@ -161,9 +161,16 @@ def test_deposit_credits_only_after_nowpayments_confirms_and_withdraw_cannot_exc
         json={"currency": "btc", "amount": "0.0004", "address": "TYh6P7x1k8mN3qR5sV7wY9zA2bC4dE6fG8"},
     )
     assert withdrawn.status_code == 200, withdrawn.text
-    assert withdrawn.json()["status"] == "pending"
+    assert withdrawn.json()["status"] == "requested"
     home = client.get("/api/v1/assets", headers=_headers(investor)).json()
     assert Decimal(home["balances"][0]["available"]) == Decimal("0.0006")
+    listed = client.get("/api/v1/admin/withdrawals", headers=headers)
+    assert listed.status_code == 200, listed.text
+    waiting = [row for row in listed.json() if row["status"] == "requested"]
+    assert waiting, listed.text
+    approved = client.post(f"/api/v1/admin/withdrawals/{waiting[0]['id']}/approve", headers=headers)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "pending"
     payout = {"id": "wd_asset", "status": "FINISHED"}
     done = client.post(
         f"/api/v1/payments/ipn/nowpayments/{me['organization_id']}",

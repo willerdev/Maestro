@@ -54,8 +54,20 @@ All routes are under `/api/v1/chain` and use the existing session.
 - `POST /wallet`, `POST /wallet/import`, `POST /wallet/export`, `GET /wallet`, `GET /wallet/balance`, `GET /wallet/transactions`, `POST /wallet/send`
 - `POST /mining/start`, `/stop`, `/pause`, `/resume`
 - `GET /mining/status`, `GET /mining/statistics`
+- `GET /mining/plans`, `GET /mining/hybrid`, `POST /mining/upgrades`, `GET /mining/upgrades`, `GET /mining/rewards`
+- Admin: `GET/PUT /mining/admin/settings`, `GET/POST /mining/admin/plans`, `PUT /mining/admin/plans/{id}`, `GET /mining/admin/overview`, `GET /mining/admin/miners`, `GET /mining/admin/suspicious`
 - `GET /blocks`, `GET /blocks/{height}`, `GET /transactions`, `GET /transactions/{hash}`, `GET /search`
 - `GET /network/status`
+
+## Hybrid mining
+
+Free proof-of-work mining is unchanged. Existing wallets, sessions, and block rewards stay on the chain.
+
+Paid plans add extra PCoin only while a mining session is running. The extra is `base_daily_pcoin * (multiplier - 1) * elapsed_seconds / 86400`, stored in `mining_reward_ledger` with Decimal math. Expired plans stop applying. Upgrades activate only after a wallet debit or a verified NOWPayments/Cryptomus IPN. A browser payment-success message cannot turn a plan on.
+
+PCoin is not USDT until a verified conversion. No new environment variables are required.
+
+Migration `0024_hybrid_mining` adds plan, upgrade, payment, and ledger tables. It does not rewrite chain blocks or balances.
 
 `network/status` reports `decentralized: false` and an empty peer list. Block and transaction propagation is a module boundary for a later peer link. `Ledger.replace_if_stronger` already rejects a weaker chain, a different genesis block, and a repeated block hash.
 

@@ -6,29 +6,37 @@ from app.connectors.metaapi import MetaApiConnector
 from app.connectors.pocketoption import PocketOptionConnector
 from app.core.config import get_settings
 
+METAAPI_METHODS = {"metaapi", "passprop"}
+
 
 class MetaApiTokenError(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
 
 
-def resolve_metaapi_credentials(credentials: dict | None) -> dict:
+def resolve_metaapi_credentials(credentials: dict | None, *, fallback_token: str = "") -> dict:
     creds = dict(credentials or {})
     source = str(creds.pop("token_source", "") or "").strip().lower()
-    if source != "default":
+    own = str(creds.get("token") or "").strip()
+    admin = (fallback_token or get_settings().metaapi_token).strip()
+    if source == "own" or (source != "default" and len(own) >= 20 and len(admin) < 20):
         return creds
-    token = get_settings().metaapi_token.strip()
+    token = admin if len(admin) >= 20 else own
     if len(token) < 20:
         raise MetaApiTokenError("The default MetaAPI token is not available")
     creds["token"] = token
     return creds
 
 
-def probe_connection(method: str, credentials: dict | None) -> dict:
+def uses_metaapi(method: str) -> bool:
+    return method in METAAPI_METHODS
+
+
+def probe_connection(method: str, credentials: dict | None, *, metaapi_token: str = "") -> dict:
     payload = credentials or {}
-    if method == "metaapi":
+    if uses_metaapi(method):
         try:
-            payload = resolve_metaapi_credentials(payload)
+            payload = resolve_metaapi_credentials(payload, fallback_token=metaapi_token)
         except MetaApiTokenError as exc:
             return {
                 "ok": False,
@@ -51,7 +59,7 @@ def probe_connection(method: str, credentials: dict | None) -> dict:
         "ok": False,
         "status": "unsupported",
         "error_code": "unsupported_method",
-        "detail": "Choose MetaAPI, MetaTrader 5, Pocket Option, contracts, or mining",
+        "detail": "Choose MetaAPI, MetaTrader 5, Pass Props, Pocket Option, contracts, or mining",
         "region": "",
         "account": None,
     }

@@ -199,38 +199,46 @@ class NowPaymentsConnector:
     ) -> dict:
         api_key = str(credentials.get("api_key") or "").strip()
         base = self.base_url(credentials, sandbox)
+        pay = (pay_currency or "usdttrc20").lower()
+        if pay in {"usdt", "trc20"}:
+            pay = "usdttrc20"
+        price = (price_currency or pay).lower()
+        if price in {"usdt", "trc20"}:
+            price = "usdttrc20"
         payload: dict = {
-            "price_amount": money_text(price_amount),
-            "price_currency": price_currency.lower(),
+            "price_amount": money_text(price_amount) if price in {"usd", "eur", "gbp"} else crypto_text(price_amount),
+            "price_currency": price,
+            "pay_currency": pay,
             "order_id": order_id,
             "order_description": description[:180] or "Maestro payment",
             "ipn_callback_url": callback_url,
         }
-        path = "/invoice"
-        if pay_currency:
-            payload["pay_currency"] = pay_currency.lower()
-            path = "/payment"
         response = self._request(
             "POST",
-            f"{base}{path}",
+            f"{base}/payment",
             headers={"x-api-key": api_key, "Content-Type": "application/json"},
             json=payload,
             client=client,
         )
         if response.status_code not in {200, 201}:
-            raise PaymentProviderError(502, _error_detail(response, "NOWPayments did not create a payment"))
-        data = _json_object(response)
-        provider_id = str(data.get("payment_id") or data.get("id") or "")
-        if not provider_id and not data.get("invoice_url"):
-            raise PaymentProviderError(502, "NOWPayments returned no payment id")
-        return {
-            "provider_payment_id": provider_id,
-            "invoice_url": str(data.get("invoice_url") or data.get("pay_url") or ""),
-            "pay_address": str(data.get("pay_address") or ""),
-            "pay_amount": data.get("pay_amount"),
-            "pay_currency": str(data.get("pay_currency") or pay_currency or ""),
-            "provider_status": str(data.get("payment_status") or "waiting"),
-        }
+            raise PaymentProviderError(502, _error_detail(response, "The default wallet did not create a deposit address"))
+        fields = _nowpayments_payment_fields(_json_object(response), pay)
+        if not fields["pay_address"] and fields["provider_payment_id"]:
+            lookup = self._request(
+                "GET",
+                f"{base}/payment/{fields['provider_payment_id']}",
+                headers={"x-api-key": api_key},
+                client=client,
+            )
+            if lookup.status_code == 200:
+                extra = _nowpayments_payment_fields(_json_object(lookup), pay)
+                if extra["pay_address"]:
+                    fields["pay_address"] = extra["pay_address"]
+                if extra["pay_amount"] not in (None, ""):
+                    fields["pay_amount"] = extra["pay_amount"]
+        if not fields["provider_payment_id"] and not fields["pay_address"] and not fields["invoice_url"]:
+            raise PaymentProviderError(502, "The default wallet did not return a deposit address")
+        return fields
 
     def create_payout(
         self,
@@ -438,6 +446,22 @@ def _auth_failure_detail(response: httpx.Response, url: str, email: str, passwor
             "Use the dashboard email exactly, including capitals. A live login does not work on the sandbox URL."
         )
     return f"NOWPayments payout login on {host} returned {response.status_code}."
+
+
+def _nowpayments_payment_fields(data: dict, pay_currency: str) -> dict:
+    blob = dict(data)
+    for key in ("result", "payment"):
+        nested = blob.get(key)
+        if isinstance(nested, dict):
+            blob.update(nested)
+    return {
+        "provider_payment_id": str(blob.get("payment_id") or blob.get("id") or ""),
+        "invoice_url": str(blob.get("invoice_url") or blob.get("pay_url") or ""),
+        "pay_address": str(blob.get("pay_address") or blob.get("payin_address") or blob.get("address") or ""),
+        "pay_amount": blob.get("pay_amount"),
+        "pay_currency": str(blob.get("pay_currency") or pay_currency or ""),
+        "provider_status": str(blob.get("payment_status") or "waiting"),
+    }
 
 
 def _json_object(response: httpx.Response) -> dict:

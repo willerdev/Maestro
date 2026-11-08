@@ -19,6 +19,9 @@ from app.api.v1.platform import router as platform_router
 from app.api.v1.router import router
 from app.api.v1.pocketoption import router as pocketoption_router
 from app.api.v1.chain import router as chain_router
+from app.api.v1.extra_wallets import router as extra_wallets_router
+from app.api.v1.contracts import router as contracts_router
+from app.api.v1.admin_users import router as admin_users_router
 from app.api.v1.setup_routes import router as setup_router
 from app.core.telemetry import RequestTimer, telemetry
 from app.core.config import get_settings
@@ -53,6 +56,9 @@ def create_app() -> FastAPI:
     app.include_router(assets_router, prefix="/api/v1")
     app.include_router(portal_router, prefix="/api/v1")
     app.include_router(chain_router, prefix="/api/v1")
+    app.include_router(extra_wallets_router, prefix="/api/v1")
+    app.include_router(contracts_router, prefix="/api/v1")
+    app.include_router(admin_users_router, prefix="/api/v1")
 
     @app.middleware("http")
     async def observe_request(request, call_next):
@@ -102,6 +108,9 @@ def create_app() -> FastAPI:
             threading.Thread(target=_live_book_loop, name="live-book", daemon=True).start()
             threading.Thread(target=_telegram_trade_loop, name="telegram-trades", daemon=True).start()
             threading.Thread(target=_telegram_copy_loop, name="telegram-copy", daemon=True).start()
+            threading.Thread(target=_contract_yield_loop, name="contract-yield", daemon=True).start()
+            threading.Thread(target=_operating_fee_loop, name="operating-fees", daemon=True).start()
+            threading.Thread(target=_mining_accrual_loop, name="mining-accrual", daemon=True).start()
 
     return app
 
@@ -168,6 +177,54 @@ def _heartbeat_loop() -> None:
             logger.exception("heartbeat_sweep_failed")
         finally:
             db.close()
+
+
+def _contract_yield_loop() -> None:
+    from app.services.contract_service import accrue_all
+
+    while True:
+        db = SessionLocal()
+        try:
+            accrue_all(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("contract_yield_failed")
+        finally:
+            db.close()
+        time.sleep(3600)
+
+
+def _operating_fee_loop() -> None:
+    from app.services.expense_service import tick_operating_fees
+
+    while True:
+        db = SessionLocal()
+        try:
+            tick_operating_fees(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("operating_fees_failed")
+        finally:
+            db.close()
+        time.sleep(60)
+
+
+def _mining_accrual_loop() -> None:
+    from app.services.mining_plan_service import tick_all_accruals
+
+    while True:
+        db = SessionLocal()
+        try:
+            tick_all_accruals(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("mining_accrual_failed")
+        finally:
+            db.close()
+        time.sleep(60)
 
 
 app = create_app()

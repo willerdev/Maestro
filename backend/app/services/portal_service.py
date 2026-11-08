@@ -236,7 +236,7 @@ def investor_portal(db: Session, user: User) -> dict:
 
 def request_capital(db: Session, user: User, fund_id: UUID, kind: str, amount: Decimal) -> dict:
     if "INVESTOR" not in _roles(db, user):
-        raise PortalError(403, "An admin has to approve you as an investor first")
+        raise PortalError(403, "Your investor application has to be approved first")
     if kind not in {"subscribe", "redeem"}:
         raise PortalError(400, "Choose subscribe or redeem")
     if amount <= 0:
@@ -413,6 +413,8 @@ def _link_trader(db: Session, user: User, answers: dict, account_id: UUID | None
 
 
 def _grant_role(db: Session, user: User, code: str) -> None:
+    if code == "SUPER_ADMIN":
+        raise PortalError(403, "Those roles cannot be granted this way")
     role = db.scalar(select(Role).where(Role.code == code))
     if role is None:
         raise PortalError(500, "Roles are not ready")

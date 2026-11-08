@@ -89,9 +89,9 @@ def account_journal(db: Session, account: Account) -> dict:
 
 
 def _sync_terminal_history(db: Session, account: Account) -> str:
-    if account.connection_method != "metaapi":
+    if account.connection_method not in {"metaapi", "passprop"}:
         return ""
-    connector = connector_for("metaapi")
+    connector = connector_for(account.connection_method)
     fetch = getattr(connector, "fetch_deals", None)
     if fetch is None:
         return ""

@@ -65,10 +65,24 @@ class MetaApiConnector:
     def inspect(self, credentials: dict, client: httpx.Client | None = None) -> dict:
         token = str(credentials.get("token") or "").strip()
         account_id = str(credentials.get("metaapi_account_id") or "").strip()
-        if not token or not account_id:
-            return _probe_fail("missing_credentials", "credentials_missing", "Enter the MetaAPI token and account id")
+        login = str(credentials.get("login") or "").strip()
+        password = str(credentials.get("password") or "")
+        server = str(credentials.get("server") or "").strip()
+        broker = str(credentials.get("broker") or "").strip()
+        platform = str(credentials.get("platform") or "mt5").strip().lower()
+        if platform not in {"mt4", "mt5"}:
+            platform = "mt5"
+        if not token:
+            return _probe_fail("missing_credentials", "credentials_missing", "The MetaAPI token is not available")
+        if not account_id:
+            if not login or not password or not server:
+                return _probe_fail("missing_credentials", "credentials_missing", "Enter the broker, server, login id, and password")
+            ensured = self._ensure_trading_account(token, login, password, server, broker, platform, client)
+            if not ensured["ok"]:
+                return ensured
+            account_id = str(ensured.get("metaapi_account_id") or "")
         if not _ACCOUNT_ID.fullmatch(account_id):
-            return _probe_fail("rejected", "metaapi_account_id", "Enter the MetaAPI account id")
+            return _probe_fail("rejected", "metaapi_account_id", "MetaAPI did not return a trading account")
         try:
             provision = self._request("GET", f"{_PROVISIONING}/users/current/accounts/{account_id}", token, client)
         except CircuitOpen:
@@ -101,10 +115,10 @@ class MetaApiConnector:
         if info.status_code != 200:
             return _probe_fail("rejected", f"http_{info.status_code}", "MetaAPI account information is not available")
         data = info.json()
-        login = str(data.get("login") or body.get("login") or "").strip()
-        name = str(data.get("name") or body.get("name") or login).strip()
-        server = str(data.get("server") or body.get("server") or "").strip()
-        broker = str(data.get("broker") or data.get("company") or "").strip()
+        login = str(data.get("login") or body.get("login") or credentials.get("login") or "").strip()
+        name = str(data.get("name") or body.get("name") or broker or login).strip()
+        server = str(data.get("server") or body.get("server") or credentials.get("server") or "").strip()
+        broker = str(credentials.get("broker") or data.get("broker") or data.get("company") or body.get("name") or "").strip()
         currency = str(data.get("currency") or body.get("baseCurrency") or "USD").strip() or "USD"
         leverage = data.get("leverage") or "100"
         return {
@@ -113,6 +127,7 @@ class MetaApiConnector:
             "error_code": "",
             "detail": "",
             "region": region,
+            "metaapi_account_id": account_id,
             "account": {
                 "display_name": name or login or "MetaAPI account",
                 "account_number": login,
@@ -263,9 +278,136 @@ class MetaApiConnector:
             raise ValueError("symbol spec unavailable")
         return _spec_payload(body)
 
+    def _ensure_trading_account(
+        self,
+        token: str,
+        login: str,
+        password: str,
+        server: str,
+        broker: str,
+        platform: str,
+        client: httpx.Client | None,
+    ) -> dict:
+        try:
+            listed = self._request("GET", f"{_PROVISIONING}/users/current/accounts", token, client)
+        except CircuitOpen:
+            return _probe_fail("circuit_open", "metaapi_circuit_open", "MetaAPI circuit is open")
+        except httpx.HTTPError:
+            return _probe_fail("unreachable", "metaapi_unreachable", "MetaAPI request failed")
+        if listed.status_code == 401:
+            return _probe_fail("rejected", "metaapi_unauthorized", "MetaAPI rejected the token")
+        if listed.status_code != 200:
+            return _probe_fail("rejected", f"http_{listed.status_code}", _response_detail(listed, "MetaAPI account list failed"))
+        match = _find_terminal(_account_rows(listed), login, server)
+        if match is None:
+            payload = {
+                "type": "cloud-g2",
+                "login": login,
+                "password": password,
+                "name": (f"{broker} {login}" if broker else login)[:64],
+                "server": server,
+                "platform": platform,
+                "magic": 0,
+                "quoteStreamingIntervalInSeconds": 2.5,
+                "reliability": "regular",
+                "region": get_settings().metaapi_region,
+                "manualTrades": True,
+            }
+            try:
+                created = self._request("POST", f"{_PROVISIONING}/users/current/accounts", token, client, json=payload)
+            except CircuitOpen:
+                return _probe_fail("circuit_open", "metaapi_circuit_open", "MetaAPI circuit is open")
+            except httpx.HTTPError:
+                return _probe_fail("unreachable", "metaapi_unreachable", "MetaAPI could not create the trading account")
+            if created.status_code == 401:
+                return _probe_fail("rejected", "metaapi_unauthorized", "MetaAPI rejected the token")
+            if created.status_code not in {200, 201, 202}:
+                return _probe_fail("rejected", f"http_{created.status_code}", _response_detail(created, "MetaAPI could not add that broker login"))
+            account_id = _created_id(created)
+            if not account_id:
+                return _probe_fail("rejected", "metaapi_account_id", "MetaAPI did not return a trading account")
+            try:
+                self._request("POST", f"{_PROVISIONING}/users/current/accounts/{account_id}/deploy", token, client)
+            except (CircuitOpen, httpx.HTTPError):
+                pass
+        else:
+            account_id = _row_id(match)
+            if not account_id:
+                return _probe_fail("rejected", "metaapi_account_id", "MetaAPI did not return a trading account")
+            if password and str(match.get("connectionStatus") or "") != "CONNECTED":
+                try:
+                    self._request("PUT", f"{_PROVISIONING}/users/current/accounts/{account_id}", token, client, json={"password": password})
+                except (CircuitOpen, httpx.HTTPError):
+                    pass
+            if str(match.get("state") or "") != "DEPLOYED":
+                try:
+                    self._request("POST", f"{_PROVISIONING}/users/current/accounts/{account_id}/deploy", token, client)
+                except (CircuitOpen, httpx.HTTPError):
+                    pass
+        return {"ok": True, "status": "connected", "error_code": "", "detail": "", "region": "", "metaapi_account_id": account_id, "account": None}
+
 
 def _probe_fail(status: str, error_code: str, detail: str) -> dict:
-    return {"ok": False, "status": status, "error_code": error_code, "detail": detail, "region": "", "account": None}
+    return {"ok": False, "status": status, "error_code": error_code, "detail": detail, "region": "", "metaapi_account_id": "", "account": None}
+
+
+def _account_rows(response: httpx.Response) -> list[dict]:
+    try:
+        body = response.json()
+    except ValueError:
+        return []
+    if isinstance(body, list):
+        rows = body
+    elif isinstance(body, dict):
+        rows = body.get("items") or body.get("accounts") or []
+    else:
+        rows = []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _find_terminal(rows: list[dict], login: str, server: str) -> dict | None:
+    wanted_login = login.strip()
+    wanted_server = server.strip().lower()
+    for row in rows:
+        if str(row.get("login") or "").strip() == wanted_login and str(row.get("server") or "").strip().lower() == wanted_server:
+            return row
+    return None
+
+
+def _row_id(row: dict) -> str:
+    for key in ("_id", "id", "accountId"):
+        value = str(row.get(key) or "").strip()
+        if _ACCOUNT_ID.fullmatch(value):
+            return value
+    return ""
+
+
+def _created_id(response: httpx.Response) -> str:
+    try:
+        parsed = response.json()
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, str) and _ACCOUNT_ID.fullmatch(parsed.strip()):
+        return parsed.strip()
+    if isinstance(parsed, dict):
+        found = _row_id(parsed)
+        if found:
+            return found
+    location = str(response.headers.get("location") or "")
+    account_id = location.rstrip("/").split("/")[-1]
+    return account_id if _ACCOUNT_ID.fullmatch(account_id) else ""
+
+
+def _response_detail(response: httpx.Response, fallback: str) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return fallback
+    if isinstance(body, dict):
+        text = str(body.get("message") or body.get("error") or "").strip()
+        if text:
+            return text[:240]
+    return fallback
 
 
 def _trade_fail(message: str) -> dict:

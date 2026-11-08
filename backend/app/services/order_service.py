@@ -31,7 +31,11 @@ def place_order(db: Session, user: User, account: Account, payload: dict, *, act
     action = str(payload.get("action") or "")
     if action not in _OPEN | _PROTECTIVE:
         raise OrderError(400, "Unsupported order")
-    if account.connection_method != "metaapi":
+    if account.connection_method == "pocketoption":
+        if action not in _OPEN:
+            raise OrderError(400, "Pocket Option only opens timed trades")
+        return _open_pocket(db, user, account, payload, actor)
+    if account.connection_method not in {"metaapi", "passprop"}:
         raise OrderError(400, "This connection cannot place trades")
     credentials = load_credentials(db, account.id)
     if not credentials.get("token") or not credentials.get("metaapi_account_id"):
@@ -74,7 +78,7 @@ def list_open_positions(db: Session, account: Account) -> list[dict]:
 
 
 def read_price(db: Session, account: Account, symbol: str) -> dict:
-    if account.connection_method != "metaapi":
+    if account.connection_method not in {"metaapi", "passprop"}:
         raise OrderError(400, "This connection cannot place trades")
     symbol = resolve_broker_symbol(symbol, account_symbols(db, account))
     credentials = load_credentials(db, account.id)
@@ -83,6 +87,78 @@ def read_price(db: Session, account: Account, symbol: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise OrderError(400, "The terminal did not return a price") from exc
     return {"symbol": quote.symbol or symbol, "bid": str(quote.bid), "ask": str(quote.ask)}
+
+
+def _open_pocket(db: Session, user: User, account: Account, payload: dict, actor: str) -> dict:
+    from app.connectors.pocketoption import PocketOptionConnector, pocket_asset
+    from app.connectors.types import NormalizedPosition
+    from app.services.ingest_service import _upsert_position
+
+    side = str(payload.get("side") or "").lower()
+    if side in {"put", "short"}:
+        side = "sell"
+    if side in {"call", "long"}:
+        side = "buy"
+    if side not in {"buy", "sell"}:
+        raise OrderError(400, "Choose call or put")
+    symbol = pocket_asset(str(payload.get("symbol") or ""))
+    if not symbol:
+        raise OrderError(400, "Enter an asset")
+    amount = _decimal(payload.get("volume"), "a stake")
+    if amount <= 0:
+        raise OrderError(400, "Enter a stake")
+    try:
+        duration = int(payload.get("duration") or 60)
+    except (TypeError, ValueError) as exc:
+        raise OrderError(400, "Choose an expiry") from exc
+    if duration < 60 or duration > 3600:
+        raise OrderError(400, "Expiry must be between 1 minute and 1 hour")
+    credentials = load_credentials(db, account.id)
+    try:
+        placed = PocketOptionConnector().open_binary(credentials, symbol=symbol, side=side, amount=amount, duration=duration)
+    except Exception as exc:  # noqa: BLE001
+        raise OrderError(400, str(exc) or "Pocket Option did not take the trade") from exc
+    if not placed.get("ok"):
+        raise OrderError(400, str(placed.get("message") or "Pocket Option rejected the trade"))
+    ticket = str(placed.get("ticket") or "")
+    entry = _decimal(placed.get("price") or 0, "0")
+    if ticket:
+        _upsert_position(
+            db,
+            account,
+            NormalizedPosition(
+                account_id=str(account.id),
+                ticket=ticket,
+                symbol=symbol,
+                side=side,
+                volume=amount,
+                entry_price=entry,
+                current_price=entry,
+                stop_loss=None,
+                take_profit=None,
+                profit=Decimal("0"),
+                swap=Decimal("0"),
+                commission=Decimal("0"),
+                open_time=datetime.now(timezone.utc),
+                magic_number=0,
+                comment="Desk",
+            ),
+        )
+    action_name = "put" if side == "sell" else "call"
+    return _finish(
+        db,
+        user,
+        account,
+        "open",
+        symbol,
+        amount,
+        "ALLOW",
+        [],
+        {"ok": True, "message": f"{action_name.upper()} {symbol} {amount} for {duration}s", "order_id": ticket, "position_id": ticket},
+        actor,
+        sent=True,
+        source="Desk",
+    )
 
 
 def _open(db: Session, user: User, account: Account, credentials: dict, payload: dict, action: str, actor: str) -> dict:
@@ -443,7 +519,7 @@ def close_with_bot_token(db: Session, token: str) -> dict:
 
 
 def close_ai_trading(db: Session, user: User | None, account: Account, app_id: str, api_key: str) -> dict:
-    if account.connection_method != "metaapi":
+    if account.connection_method not in {"metaapi", "passprop"}:
         raise OrderError(400, "This connection cannot close trades")
     app_id = app_id.strip()
     api_key = api_key.strip()

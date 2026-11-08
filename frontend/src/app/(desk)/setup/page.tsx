@@ -36,10 +36,7 @@ export default function SetupPage() {
   const [probe, setProbe] = useState<Probe | null>(null);
   const [dial, setDial] = useState("");
   const [done, setDone] = useState<Done | null>(null);
-  const [wallet, setWallet] = useState<"hosted" | "external">("hosted");
-  const [payProvider, setPayProvider] = useState("nowpayments");
-  const [apiUrl, setApiUrl] = useState("https://api.nowpayments.io/v1");
-  const [metaAccountId, setMetaAccountId] = useState("");
+  const [enabled, setEnabled] = useState<Partial<Record<ConnectionMethod, boolean>> | undefined>();
 
   useEffect(() => {
     apiJson<Status>("/api/v1/setup/status")
@@ -48,6 +45,9 @@ export default function SetupPage() {
         setDial(body.phone_country_code || body.countries[0]?.dial || "");
       })
       .catch((err: Error) => setError(err.message));
+    apiJson<{ enabled: Partial<Record<ConnectionMethod, boolean>> }>("/api/v1/system")
+      .then((info) => setEnabled(info.enabled || {}))
+      .catch(() => undefined);
   }, []);
 
   function onCountry(name: string) {
@@ -71,21 +71,7 @@ export default function SetupPage() {
           admin_email: form.get("admin_email"),
           totp_code: String(form.get("totp_code") || ""),
           account,
-          payment: wallet === "hosted"
-            ? { provider: "nowpayments", wallet: "hosted", sandbox: false, credentials: {} }
-            : {
-                provider: payProvider,
-                wallet: "external",
-                sandbox: form.get("sandbox") === "on",
-                credentials: {
-                  api_key: String(form.get("pay_api_key") || ""),
-                  api_url: String(form.get("api_url") || ""),
-                  ipn_secret: String(form.get("ipn_secret") || ""),
-                  payout_email: String(form.get("payout_email") || ""),
-                  payout_password: String(form.get("payout_password") || ""),
-                  merchant_id: String(form.get("merchant_id") || ""),
-                },
-              },
+          payment: { provider: "nowpayments", wallet: "hosted", sandbox: false, credentials: {} },
         }),
       });
       setDone(body);
@@ -108,7 +94,9 @@ export default function SetupPage() {
             Connection check: {test.ok ? "connected. The account details were read from the terminal." : test.detail || test.error_code || test.status}
           </p>
         ) : null}
-        <button className="primary" onClick={() => router.push("/dashboard")}>Open the desk</button>
+        <button className="primary" onClick={() => router.push(method === "blockchain" ? "/contracts" : method === "mining" ? "/project-coin" : "/dashboard")}>
+          {method === "blockchain" ? "Open contracts" : method === "mining" ? "Open Project Coin" : "Open the desk"}
+        </button>
       </div>
     );
   }
@@ -117,7 +105,7 @@ export default function SetupPage() {
     <div className="max-w-3xl">
       <PageTitle
         title="Set up Maestro"
-        detail="Complete the firm profile and choose a wallet. The MetaAPI account id and Google Authenticator can wait until Settings."
+        detail="Complete the firm profile. Connector keys wait in Settings. Add a terminal with broker login if you want one now."
       />
       {error ? <p className="text-loss mb-3">{error}</p> : null}
       <form className="flex flex-col gap-4" onSubmit={onSubmit}>
@@ -150,7 +138,7 @@ export default function SetupPage() {
               <input name="phone_number" placeholder="712345678" required />
             </label>
             <label className="text-sm text-muted sm:col-span-2">
-              Admin email
+              Your email
               <input name="admin_email" type="email" defaultValue={status.admin_email} required />
             </label>
           </div>
@@ -163,90 +151,9 @@ export default function SetupPage() {
         </fieldset>
         <fieldset className="section">
           <legend>Crypto payments</legend>
-          <p className="text-sm text-muted mb-3">
-            Choose the default self-hosted wallet, or connect an external wallet. A payment is marked paid only after the provider confirms it.
+          <p className="text-sm text-muted">
+            The default wallet is used. Payment keys, MetaAPI, email, Telegram, OpenAI, and DeepSeek are saved later in Settings. People who add accounts only fill broker login details.
           </p>
-          <div className="grid gap-2 mb-3">
-            <label className={`choice ${wallet === "hosted" ? "on" : ""}`}>
-              <input type="radio" name="wallet" checked={wallet === "hosted"} onChange={() => setWallet("hosted")} />
-              <span>
-                <strong>Default self-hosted wallet</strong>
-                <span className="block text-sm text-muted">Maestro uses its own wallet. The payment keys stay on the server and are not shown here.</span>
-              </span>
-            </label>
-            <label className={`choice ${wallet === "external" ? "on" : ""}`}>
-              <input type="radio" name="wallet" checked={wallet === "external"} onChange={() => setWallet("external")} />
-              <span>
-                <strong>External wallet</strong>
-                <span className="block text-sm text-muted">Connect your own NOWPayments or Cryptomus account.</span>
-              </span>
-            </label>
-          </div>
-          {wallet === "external" ? (
-            <>
-              <p className="text-sm mb-3 border border-line rounded-lg px-3 py-3">
-                External wallets are risky. The provider holds the payment, and fees may be applied.
-              </p>
-              <div className="grid gap-2 mb-3">
-                <label className={`choice ${payProvider === "nowpayments" ? "on" : ""}`}>
-                  <input type="radio" name="pay_provider" checked={payProvider === "nowpayments"} onChange={() => setPayProvider("nowpayments")} />
-                  <span>
-                    <strong>NOWPayments</strong>
-                    <span className="block text-sm text-muted">API key, API URL, payout email, payout password, and IPN secret. The email must match the NOWPayments dashboard, including capitals.</span>
-                  </span>
-                </label>
-                <label className={`choice ${payProvider === "cryptomus" ? "on" : ""}`}>
-                  <input type="radio" name="pay_provider" checked={payProvider === "cryptomus"} onChange={() => setPayProvider("cryptomus")} />
-                  <span>
-                    <strong>Cryptomus</strong>
-                    <span className="block text-sm text-muted">Merchant id and payment API key.</span>
-                  </span>
-                </label>
-              </div>
-              <div className="grid sm:grid-cols-2 gap-3">
-                {payProvider === "cryptomus" ? (
-                  <label className="text-sm text-muted">
-                    Merchant id
-                    <input name="merchant_id" required autoComplete="off" />
-                  </label>
-                ) : null}
-                <label className="text-sm text-muted">
-                  API key
-                  <input name="pay_api_key" type="password" required autoComplete="off" />
-                </label>
-                {payProvider === "nowpayments" ? (
-                  <>
-                    <label className="text-sm text-muted sm:col-span-2">
-                      API URL
-                      <input name="api_url" type="url" required value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} autoComplete="off" />
-                    </label>
-                    <label className="text-sm text-muted">
-                      Payout email
-                      <input name="payout_email" type="text" required autoComplete="username" placeholder="Same email as the NOWPayments dashboard" />
-                    </label>
-                    <label className="text-sm text-muted">
-                      Payout password
-                      <input name="payout_password" type="password" required autoComplete="new-password" />
-                    </label>
-                    <label className="text-sm text-muted">
-                      IPN secret
-                      <input name="ipn_secret" type="password" required autoComplete="off" />
-                    </label>
-                  </>
-                ) : null}
-              </div>
-              {payProvider === "nowpayments" ? (
-                <label className="text-sm flex gap-2 items-center mt-3">
-                  <input
-                    className="w-auto"
-                    type="checkbox"
-                    name="sandbox"
-                    onChange={(event) => setApiUrl(event.target.checked ? "https://api-sandbox.nowpayments.io/v1" : "https://api.nowpayments.io/v1")}
-                  /> Use the NOWPayments sandbox host in the API URL
-                </label>
-              ) : null}
-            </>
-          ) : null}
         </fieldset>
         <AccountSections
           method={method}
@@ -254,9 +161,10 @@ export default function SetupPage() {
           allowWebhook={false}
           onProbe={setProbe}
           metaApiOptional
-          onMetaAccountId={setMetaAccountId}
+          gateTerms
+          enabled={enabled}
         />
-        <button className="primary" type="submit" disabled={!(method === "metaapi" && metaAccountId.trim() === "") && method !== "blockchain" && method !== "mining" && !probe?.ok}>Save setup</button>
+        <button className="primary" type="submit" disabled={method !== "blockchain" && method !== "mining" && method !== "metaapi" && !probe?.ok}>Save setup</button>
       </form>
     </div>
   );

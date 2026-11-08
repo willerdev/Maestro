@@ -56,7 +56,7 @@ export default function InvestorPortal() {
         method: "POST",
         body: JSON.stringify({ direction: form.get("direction"), amount: form.get("amount"), note: form.get("note") || "" }),
       });
-      setMessage("Sent. A deposit is available only after an admin posts it. A withdrawal cannot exceed the available balance.");
+      setMessage("Sent. A deposit is available only after it is posted. A withdrawal cannot exceed the available balance.");
       load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Wallet movement was not sent");
@@ -71,7 +71,7 @@ export default function InvestorPortal() {
         method: "POST",
         body: JSON.stringify({ fund_id: form.get("fund_id"), kind: form.get("kind"), amount: form.get("amount") }),
       });
-      setMessage("Request sent. Units change only after an admin approves it.");
+      setMessage("Request sent. Units change only after it is approved.");
       load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Request was not sent");

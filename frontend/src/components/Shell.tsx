@@ -2,60 +2,97 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import { api, apiJson, clearSession, type User } from "@/lib/api";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { api, apiJson, clearSession, isSystemAdmin, type User } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-const MENUS: { label: string; items: [string, string, IconName][] }[] = [
-  { label: "Dashboard", items: [["/dashboard", "Dashboard", "grid"]] },
+type Scope = "user" | "desk";
+type MenuItem = [string, string, IconName, Scope];
+
+const MENUS: { label: string; items: MenuItem[] }[] = [
+  { label: "Dashboard", items: [["/dashboard", "Dashboard", "grid", "user"]] },
   {
     label: "Trading",
     items: [
-      ["/accounts", "Accounts", "wallet"],
-      ["/trades", "Trades", "swap"],
-      ["/journal", "Journal", "book"],
+      ["/accounts", "Accounts", "wallet", "user"],
+      ["/trades", "Trades", "swap", "user"],
+      ["/journal", "Journal", "book", "user"],
     ],
   },
   {
     label: "Risk",
     items: [
-      ["/risk-engine", "Risk Engine", "shield"],
-      ["/risk-rules", "Risk Rules", "sliders"],
+      ["/risk-engine", "Risk Engine", "shield", "user"],
+      ["/risk-rules", "Risk Rules", "sliders", "user"],
     ],
   },
-  { label: "Funds", items: [["/funds", "Funds", "fund"]] },
-  { label: "Wallet", items: [["/wallet", "Wallet", "coin"]] },
-  { label: "Alerts", items: [["/alerts", "Alerts", "bell"]] },
+  { label: "Funds", items: [["/funds", "Funds", "fund", "user"]] },
+  { label: "Wallet", items: [["/wallet", "Wallet", "coin", "user"]] },
+  { label: "Alerts", items: [["/alerts", "Alerts", "bell", "user"]] },
   {
     label: "Reports",
     items: [
-      ["/reports", "Reports", "file"],
+      ["/reports", "Reports", "file", "user"],
     ],
   },
   {
     label: "Connect",
     items: [
-      ["/contracts", "Contracts", "contract"],
-      ["/mining", "Mining", "mine"],
-      ["/project-coin", "Project Coin", "coin"],
-      ["/webhooks", "Webhooks", "link"],
-      ["/payments", "Payments", "card"],
-      ["/telegram", "Telegram", "send"],
+      ["/contracts", "Contracts", "contract", "user"],
+      ["/pass-props", "Pass Props", "shield", "user"],
+      ["/project-coin", "Project Coin", "coin", "user"],
+      ["/webhooks", "Webhooks", "link", "user"],
+      ["/payments", "Payments", "card", "user"],
+      ["/telegram", "Telegram", "send", "user"],
     ],
   },
   {
     label: "System",
     items: [
-      ["/settings", "Settings", "gear"],
-      ["/recovery", "Recovery", "lock"],
-      ["/audit", "Audit Logs", "list"],
-      ["/applications", "Applications", "users"],
+      ["/users", "Users", "users", "desk"],
+      ["/withdrawals", "Withdrawals", "card", "desk"],
+      ["/settings", "Settings", "gear", "user"],
+      ["/recovery", "Recovery", "lock", "desk"],
+      ["/audit", "Audit Logs", "list", "desk"],
+      ["/applications", "Applications", "users", "desk"],
     ],
   },
 ];
 
-const LINKS = MENUS.flatMap((menu) => menu.items);
 const DESK_ROLES = ["SUPER_ADMIN", "ADMIN", "RISK_MANAGER", "TRADER", "VIEWER"];
+
+function menusFor(roles: string[]) {
+  const admin = isSystemAdmin(roles);
+  return MENUS.map((menu) => ({
+    ...menu,
+    items: menu.items.filter(([, , , scope]) => admin || scope === "user"),
+  })).filter((menu) => menu.items.length);
+}
+
+function menuScope(items: MenuItem[]): Scope | "mixed" {
+  const scopes = new Set(items.map((item) => item[3]));
+  if (scopes.size === 1) return items[0][3];
+  return "mixed";
+}
+
+function scopeTitle(scope: Scope | "mixed") {
+  if (scope === "desk") return "Users do not see this menu";
+  if (scope === "mixed") return "Blue: users see this. Amber: users do not.";
+  return "Users see this menu";
+}
+
+function ScopeDot({ show, scope }: { show: boolean; scope?: Scope | "mixed" }) {
+  if (!show || !scope) return null;
+  if (scope === "mixed") {
+    return (
+      <b className="scope-dots" aria-hidden="true">
+        <i className="scope-dot user" />
+        <i className="scope-dot desk" />
+      </b>
+    );
+  }
+  return <i className={`scope-dot ${scope}`} aria-hidden="true" />;
+}
 
 export function homeFor(roles: string[]) {
   if (roles.some((role) => DESK_ROLES.includes(role))) return "/dashboard";
@@ -102,6 +139,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
   const menuRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -120,14 +158,26 @@ export function Shell({ children }: { children: React.ReactNode }) {
           router.replace(home);
           return;
         }
-        if (pathname !== "/setup" && pathname !== "/contracts" && pathname !== "/mining") {
+        if (pathname !== "/setup" && pathname !== "/contracts") {
           const setup = await apiJson<{ complete: boolean }>("/api/v1/setup/status");
           if (!setup.complete) {
             router.replace("/setup");
             return;
           }
         }
-        setReady(true);
+        apiJson<{ allowed: boolean }>("/api/v1/operating-status")
+          .then((ops) => {
+            if (cancelled) return;
+            setLocked(!ops.allowed);
+            const open = pathname === "/dashboard" || pathname === "/wallet" || pathname === "/payments" || pathname === "/settings";
+            if (!ops.allowed && !open) {
+              router.replace("/dashboard");
+            }
+            setReady(true);
+          })
+          .catch(() => {
+            if (!cancelled) setReady(true);
+          });
       })
       .catch(() => router.replace("/login"));
     return () => {
@@ -157,17 +207,32 @@ export function Shell({ children }: { children: React.ReactNode }) {
     return <div className="min-h-screen grid place-items-center text-muted">Loading desk…</div>;
   }
 
+  const menus = menusFor(user?.roles || []).map((menu) => (
+    locked
+      ? { ...menu, items: menu.items.filter(([href]) => href === "/dashboard" || href === "/wallet" || href === "/payments" || href === "/settings") }
+      : menu
+  )).filter((menu) => menu.items.length);
+  const links = menus.flatMap((menu) => menu.items);
+  const showScopes = isSystemAdmin(user?.roles);
+
   return (
     <div className="desk-shell">
       <aside className="desk-rail">
         <Link href="/dashboard" className="desk-mark" title="Maestro">M</Link>
         <nav className="flex flex-col items-stretch gap-1" onMouseDown={(event) => event.stopPropagation()}>
-          {LINKS.map(([href, label, icon]) => {
+          {links.map(([href, label, icon, scope]) => {
             const on = pathname === href || pathname.startsWith(`${href}/`);
             return (
-              <Link key={href} href={href} className={on ? "on" : ""} title={label} aria-label={label}>
+              <Link
+                key={href}
+                href={href}
+                className={on ? "on" : ""}
+                title={showScopes ? `${label} · ${scopeTitle(scope)}` : label}
+                aria-label={label}
+              >
                 <Icon name={icon} />
                 <span>{label}</span>
+                <ScopeDot show={showScopes} scope={scope} />
               </Link>
             );
           })}
@@ -176,11 +241,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="desk-main">
         <header className="desk-top">
           <nav className="desk-menu" ref={menuRef}>
-            {MENUS.map((menu) => {
+            {menus.map((menu) => {
               const active = menu.items.some(([href]) => pathname === href || pathname.startsWith(`${href}/`));
+              const group = menuScope(menu.items);
               if (menu.items.length === 1) {
-                const [href, label] = menu.items[0];
-                return <Link key={label} href={href} className={active ? "on" : ""}>{label}</Link>;
+                const [href, label, , scope] = menu.items[0];
+                return (
+                  <Link
+                    key={label}
+                    href={href}
+                    className={active ? "on" : ""}
+                    title={showScopes ? scopeTitle(scope) : undefined}
+                  >
+                    {label}
+                    <ScopeDot show={showScopes} scope={scope} />
+                  </Link>
+                );
               }
               const open = openMenu === menu.label;
               return (
@@ -189,15 +265,27 @@ export function Shell({ children }: { children: React.ReactNode }) {
                     type="button"
                     className={active ? "menu on" : "menu"}
                     aria-expanded={open}
+                    title={showScopes ? scopeTitle(group) : undefined}
                     onClick={() => setOpenMenu(open ? null : menu.label)}
                   >
                     {menu.label}
+                    <ScopeDot show={showScopes} scope={group} />
                   </button>
                   {open ? (
                     <div className="desk-sub">
-                      {menu.items.map(([href, label]) => {
+                      {menu.items.map(([href, label, , scope]) => {
                         const on = pathname === href || pathname.startsWith(`${href}/`);
-                        return <Link key={href} href={href} className={on ? "on" : ""}>{label}</Link>;
+                        return (
+                          <Link
+                            key={href}
+                            href={href}
+                            className={on ? "on" : ""}
+                            title={showScopes ? scopeTitle(scope) : undefined}
+                          >
+                            {label}
+                            <ScopeDot show={showScopes} scope={scope} />
+                          </Link>
+                        );
                       })}
                     </div>
                   ) : null}
@@ -206,6 +294,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
           <div className="desk-user">
+            {showScopes ? (
+              <div className="desk-legend" aria-label="Menu dots">
+                <span><i className="scope-dot user" /> Users see</span>
+                <span><i className="scope-dot desk" /> Hidden</span>
+              </div>
+            ) : null}
             <span>{user?.email}</span>
             <ThemeToggle />
             <button className="ghost" onClick={logout}>Log out</button>
@@ -217,7 +311,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function PageTitle({ title, detail }: { title: string; detail?: string }) {
+export function PageTitle({ title, detail }: { title: string; detail?: ReactNode }) {
   return (
     <header className="mb-5">
       <h1 className="text-2xl font-semibold">{title}</h1>

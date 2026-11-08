@@ -19,7 +19,7 @@ from app.core.encryption import decrypt_json, encrypt_json
 from app.domain.audit import write_audit
 from app.models.entities import CryptoPayment, PaymentProviderConfig, User
 
-PURPOSES = {"subscription", "deposit", "other"}
+PURPOSES = {"subscription", "deposit", "other", "mining_upgrade"}
 
 
 class PaymentError(Exception):
@@ -57,14 +57,19 @@ def save_provider(
     provider = "nowpayments" if wallet == "hosted" else str(payload.get("provider") or "").strip().lower()
     connector = connector_for(provider)
     if connector is None:
-        raise PaymentError(400, "Choose NOWPayments or Cryptomus")
+        raise PaymentError(400, "Choose Cryptomus for an external wallet")
     if wallet == "hosted":
-        credentials, probe_live = _hosted_save_plan()
+        incoming = dict(payload.get("credentials") or {})
         sandbox = False
-        if probe_live:
+        if str(incoming.get("api_key") or "").strip():
+            credentials = _merge_hosted_credentials(incoming)
+            probe_live = bool(credentials.get("api_key"))
+        else:
+            credentials, probe_live = _hosted_save_plan()
+        if probe_live and credentials.get("ipn_secret") and credentials.get("payout_email") and credentials.get("payout_password"):
             probed = connector.probe(credentials, sandbox=sandbox, client=client)
             if not probed["ok"]:
-                raise PaymentError(400, probed["detail"])
+                raise PaymentError(400, "The default self-hosted wallet is not ready.")
     else:
         credentials = dict(payload.get("credentials") or {})
         sandbox = bool(payload.get("sandbox"))
@@ -72,7 +77,7 @@ def save_provider(
             sandbox = False
         probed = connector.probe(credentials, sandbox=sandbox, client=client)
         if not probed["ok"]:
-            raise PaymentError(400, probed["detail"])
+            raise PaymentError(400, _public_wallet_detail(probed["detail"]) if provider == "nowpayments" else probed["detail"])
     stored = _public_credentials(provider, credentials)
     stored["hosted"] = wallet == "hosted"
     nonce, ciphertext = encrypt_json(stored)
@@ -120,7 +125,7 @@ def create_payment(
 ) -> dict:
     row = _config(db, user.organization_id)
     if row is None or not row.enabled:
-        raise PaymentError(400, "Connect NOWPayments or Cryptomus before requesting a crypto payment")
+        raise PaymentError(400, "Connect a payment wallet before requesting a crypto payment")
     amount = _amount(payload.get("price_amount"), amount_scale)
     currency = str(payload.get("price_currency") or "USD").strip().upper()
     if len(currency) < 2 or len(currency) > 20:
@@ -128,15 +133,13 @@ def create_payment(
     pay_currency = str(payload.get("pay_currency") or "").strip()
     purpose = str(payload.get("purpose") or "deposit").strip().lower()
     if purpose not in PURPOSES:
-        raise PaymentError(400, "Purpose must be subscription, deposit, or other")
+        raise PaymentError(400, "Purpose must be subscription, deposit, mining_upgrade, or other")
     description = str(payload.get("description") or "").strip()[:240]
     order_id = uuid4().hex
     connector = connector_for(row.provider)
     credentials = decrypt_json(row.secret_nonce, row.secret_ciphertext)
     if credentials.get("hosted"):
-        if not _hosted_wallet_ready():
-            raise PaymentError(400, "The default self-hosted wallet is selected. A payment cannot be created until that wallet is ready on the server.")
-        credentials = _hosted_nowpayments_credentials()
+        credentials = _hosted_deposit_credentials(credentials)
     try:
         created = connector.create_payment(
             credentials,
@@ -150,7 +153,7 @@ def create_payment(
             client=client,
         )
     except PaymentProviderError as exc:
-        raise PaymentError(exc.status, exc.detail) from exc
+        raise PaymentError(exc.status, _public_wallet_detail(exc.detail)) from exc
     status = canonical_status(row.provider, created["provider_status"])
     if status == "paid":
         status = "confirming"
@@ -205,6 +208,9 @@ def apply_nowpayments_ipn(db: Session, organization_id, body: dict, signature: s
         from app.services.asset_service import settle_asset_deposit
 
         settle_asset_deposit(db, row.organization_id, order_id, result["status"], body)
+        from app.services.mining_plan_service import settle_mining_upgrade
+
+        settle_mining_upgrade(db, row.organization_id, order_id, result["status"], body)
         return result
     from app.services.asset_service import settle_asset_payout
 
@@ -221,7 +227,11 @@ def apply_cryptomus_ipn(db: Session, organization_id, body: dict) -> dict:
     credentials = decrypt_json(row.secret_nonce, row.secret_ciphertext)
     if not cryptomus_signature_matches(body, str(credentials.get("api_key") or ""), str(body.get("sign") or "")):
         raise PaymentError(401, "Payment notification signature did not match")
-    return _apply_provider_update(db, row, str(body.get("order_id") or ""), str(body.get("status") or body.get("payment_status") or ""), body)
+    result = _apply_provider_update(db, row, str(body.get("order_id") or ""), str(body.get("status") or body.get("payment_status") or ""), body)
+    from app.services.mining_plan_service import settle_mining_upgrade
+
+    settle_mining_upgrade(db, row.organization_id, str(body.get("order_id") or ""), result["status"], body)
+    return result
 
 
 def _apply_provider_update(db: Session, config: PaymentProviderConfig, order_id: str, raw_status: str, body: dict) -> dict:
@@ -306,18 +316,43 @@ def _hosted_wallet_ready() -> bool:
     )
 
 
-def _hosted_nowpayments_credentials() -> dict:
+def _hosted_deposit_credentials(stored: dict | None = None) -> dict:
     settings = get_settings()
-    credentials = {
-        "api_key": settings.nowpayments_api_key.strip(),
-        "api_url": (settings.nowpayments_api_url or "https://api.nowpayments.io/v1").strip().rstrip("/"),
-        "ipn_secret": settings.nowpayments_ipn_secret.strip(),
-        "payout_email": settings.nowpayments_payout_email.strip(),
-        "payout_password": settings.nowpayments_payout_password,
+    stored = stored if isinstance(stored, dict) else {}
+    api_key = str(stored.get("api_key") or settings.nowpayments_api_key or "").strip()
+    if not api_key:
+        raise PaymentError(400, "The default wallet cannot create a USDT TRC20 address yet.")
+    return {
+        "api_key": api_key,
+        "api_url": str(stored.get("api_url") or settings.nowpayments_api_url or "https://api.nowpayments.io/v1").strip().rstrip("/"),
+        "ipn_secret": str(stored.get("ipn_secret") or settings.nowpayments_ipn_secret or "").strip(),
+        "payout_email": str(stored.get("payout_email") or settings.nowpayments_payout_email or "").strip(),
+        "payout_password": stored.get("payout_password") or settings.nowpayments_payout_password,
     }
-    if not all(credentials.values()):
-        raise PaymentError(400, "The default self-hosted wallet is not available")
+
+
+def _merge_hosted_credentials(incoming: dict) -> dict:
+    current = _hosted_save_plan()[0]
+    merged = dict(current)
+    for key in ("api_key", "api_url", "ipn_secret", "payout_email", "payout_password", "public_key"):
+        value = incoming.get(key)
+        if value not in (None, ""):
+            merged[key] = value
+    return merged
+
+
+def _hosted_nowpayments_credentials() -> dict:
+    credentials = _hosted_deposit_credentials()
+    if not credentials["ipn_secret"] or not credentials["payout_email"] or not credentials["payout_password"]:
+        raise PaymentError(400, "The default wallet cannot send a payout yet.")
     return credentials
+
+
+def _public_wallet_detail(detail: str) -> str:
+    text = str(detail or "").strip()
+    if not text:
+        return "The payment wallet rejected the request"
+    return text.replace("NOWPayments", "The default wallet").replace("nowpayments.io", "the wallet")
 
 
 def _wallet_kind(row: PaymentProviderConfig) -> str:
