@@ -37,6 +37,7 @@ const MENUS: { label: string; items: [string, string, IconName][] }[] = [
     items: [
       ["/contracts", "Contracts", "contract"],
       ["/mining", "Mining", "mine"],
+      ["/project-coin", "Project Coin", "coin"],
       ["/webhooks", "Webhooks", "link"],
       ["/payments", "Payments", "card"],
       ["/telegram", "Telegram", "send"],

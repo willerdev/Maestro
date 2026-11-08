@@ -1,4 +1,5 @@
 from app.models.base import Base
+from app.models.chain_entities import ChainBlockRow, ChainHit, ChainNode, ChainSessionRow, ChainTxRow, ChainWallet
 from app.models.entities import (
     Account,
     AssetTransfer,

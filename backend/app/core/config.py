@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     nowpayments_ipn_secret: str = ""
     nowpayments_payout_email: str = ""
     nowpayments_payout_password: str = ""
+    chain_coin_name: str = "Project Coin"
+    chain_symbol: str = "PCOIN"
+    chain_max_supply: int = 21_000_000
+    chain_initial_reward: int = 50
+    chain_halving_interval: int = 210_000
+    chain_difficulty: int = 16
+    chain_fee: str = "0.001"
+    chain_cpu_percent: int = 20
+    chain_cpu_max: int = 50
 
     @property
     def cors_origin_list(self) -> list[str]:

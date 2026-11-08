@@ -30,6 +30,7 @@ export function AccountSections({
   onProbe,
   metaApiOptional = false,
   onMetaAccountId,
+  showRevenue = false,
 }: {
   method: ConnectionMethod;
   onMethod: (method: ConnectionMethod) => void;
@@ -37,6 +38,7 @@ export function AccountSections({
   onProbe: (probe: Probe | null) => void;
   metaApiOptional?: boolean;
   onMetaAccountId?: (accountId: string) => void;
+  showRevenue?: boolean;
 }) {
   const [tokenSource, setTokenSource] = useState<"default" | "own">("default");
   const [token, setToken] = useState("");
@@ -167,6 +169,7 @@ export function AccountSections({
             <span>
               <strong>MetaAPI</strong>
               <span className="block text-xs text-muted">Cloud terminal. The region is read from the token and account id.</span>
+              {showRevenue ? <span className="block text-xs text-accent mt-1">Hybrid revenue, $1 to $1,000,000.</span> : null}
             </span>
           </label>
           <label className={`choice ${method === "local_mt5" ? "on" : ""}`}>
@@ -174,6 +177,7 @@ export function AccountSections({
             <span>
               <strong>MetaTrader 5</strong>
               <span className="block text-xs text-muted">The terminal must be running and logged in on this same computer.</span>
+              {showRevenue ? <span className="block text-xs text-accent mt-1">Hybrid revenue, $1 to $1,000,000.</span> : null}
             </span>
           </label>
           <label className={`choice ${method === "pocketoption" ? "on" : ""}`}>
@@ -181,6 +185,7 @@ export function AccountSections({
             <span>
               <strong>Pocket Option</strong>
               <span className="block text-xs text-muted">A login window opens. Sign in there. Maestro reads the demo and real balances.</span>
+              {showRevenue ? <span className="block text-xs text-accent mt-1">Revenue $1 to $10,000. Minimum deposit $100.</span> : null}
             </span>
           </label>
           <label className={`choice ${method === "blockchain" ? "on" : ""}`}>
@@ -188,6 +193,7 @@ export function AccountSections({
             <span>
               <strong>Blockchain contracts</strong>
               <span className="block text-xs text-muted">A separate page reads a public wallet and one contract. No private key.</span>
+              {showRevenue ? <span className="block text-xs text-accent mt-1">Revenue $50 to $1,000 per day. Minimum deposit $2,000.</span> : null}
             </span>
           </label>
           <label className={`choice ${method === "mining" ? "on" : ""}`}>
@@ -195,6 +201,7 @@ export function AccountSections({
             <span>
               <strong>Mining</strong>
               <span className="block text-xs text-muted">A separate page reads a mining payout address. No private key.</span>
+              {showRevenue ? <span className="block text-xs text-accent mt-1">Revenue $0.02 to $5 a day. Minimum deposit: none, as long as the software is working.</span> : null}
             </span>
           </label>
           {allowWebhook ? (
@@ -203,6 +210,7 @@ export function AccountSections({
               <span>
                 <strong>Webhook</strong>
                 <span className="block text-xs text-muted">An Expert Advisor posts events. Credentials are shown once after save.</span>
+                {showRevenue ? <span className="block text-xs text-accent mt-1">Revenue $0 per day.</span> : null}
               </span>
             </label>
           ) : null}
@@ -257,16 +265,23 @@ export function AccountSections({
           <div className="grid gap-3">
             <input type="hidden" name="pocket_session_id" value={pocketId} />
             <p className="text-sm text-muted">Sign in yourself in the Pocket Option window. Switch between Demo and Real so both balances are read. The session token stays on the server and is not shown here.</p>
+            {showRevenue ? <p className="text-sm text-accent">Minimum deposit $100.</p> : null}
             <button className="primary" type="button" onClick={openPocket}>Open Pocket Option login</button>
             {pocketDetail ? <p className="text-sm">{pocketDetail}</p> : null}
             {result?.ok ? <p className="text-sm text-profit">{result.detail}</p> : null}
           </div>
         ) : null}
         {method === "blockchain" ? (
-          <p className="text-sm text-muted">Contracts have their own page. <Link className="text-accent" href="/contracts">Open contracts</Link>.</p>
+          <div className="grid gap-2">
+            <p className="text-sm text-muted">Contracts have their own page. <Link className="text-accent" href="/contracts">Open contracts</Link>.</p>
+            {showRevenue ? <p className="text-sm text-accent">Minimum deposit $2,000.</p> : null}
+          </div>
         ) : null}
         {method === "mining" ? (
-          <p className="text-sm text-muted">Mining has its own page. <Link className="text-accent" href="/mining">Open mining</Link>.</p>
+          <div className="grid gap-2">
+            <p className="text-sm text-muted">Mining has its own page. <Link className="text-accent" href="/mining">Open mining</Link>.</p>
+            {showRevenue ? <p className="text-sm text-accent">Minimum deposit: none, as long as the software is working.</p> : null}
+          </div>
         ) : null}
         {method === "webhook" ? (
           <div className="grid sm:grid-cols-2 gap-3">

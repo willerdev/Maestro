@@ -51,7 +51,7 @@ export default function NewAccountPage() {
         </div>
       ) : (
         <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-          <AccountSections method={method} onMethod={setMethod} allowWebhook onProbe={setProbe} />
+          <AccountSections method={method} onMethod={setMethod} allowWebhook showRevenue onProbe={setProbe} />
           <button className="primary" type="submit" disabled={method === "blockchain" || method === "mining" || (method !== "webhook" && !probe?.ok)}>Save account</button>
         </form>
       )}

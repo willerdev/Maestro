@@ -18,6 +18,7 @@ from app.api.v1.recovery import router as recovery_router
 from app.api.v1.platform import router as platform_router
 from app.api.v1.router import router
 from app.api.v1.pocketoption import router as pocketoption_router
+from app.api.v1.chain import router as chain_router
 from app.api.v1.setup_routes import router as setup_router
 from app.core.telemetry import RequestTimer, telemetry
 from app.core.config import get_settings
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(funds_router, prefix="/api/v1")
     app.include_router(assets_router, prefix="/api/v1")
     app.include_router(portal_router, prefix="/api/v1")
+    app.include_router(chain_router, prefix="/api/v1")
 
     @app.middleware("http")
     async def observe_request(request, call_next):

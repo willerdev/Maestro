@@ -20,6 +20,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "payments.manage",
         "funds.read",
         "funds.manage",
+        "chain.read",
+        "chain.mine",
     },
     "RISK_MANAGER": {
         "accounts.read",
@@ -35,6 +37,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "webhooks.manage",
         "funds.read",
         "funds.manage",
+        "chain.read",
     },
     "TRADER": {
         "accounts.read",
@@ -47,12 +50,15 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "ai.invoke",
         "webhooks.manage",
         "funds.read",
+        "chain.read",
+        "chain.mine",
     },
     "VIEWER": {
         "accounts.read",
         "risk_rules.read",
         "alerts.read",
         "funds.read",
+        "chain.read",
     },
     "APPLICANT": set(),
     "INVESTOR": {"portal.investor"},

@@ -90,6 +90,7 @@ export default function MiningPage() {
             <li>The chain the miner is paid on.</li>
             <li>The public payout address.</li>
             <li>A worker name, if you want it stored with the payout.</li>
+            <li>Minimum deposit: none, as long as the software is working.</li>
           </ul>
           <p className="text-sm text-muted mt-3">A private key or seed phrase is rejected and is not stored.</p>
         </section>

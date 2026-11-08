@@ -89,6 +89,7 @@ export default function ContractsPage() {
             <li>Ethereum, BNB Chain, or Polygon.</li>
             <li>The public wallet that holds the contract balance.</li>
             <li>The contract address.</li>
+            <li>Minimum deposit $2,000.</li>
           </ul>
           <p className="text-sm text-muted mt-3">A private key or seed phrase is rejected and is not stored.</p>
         </section>
