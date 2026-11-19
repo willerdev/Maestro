@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#071018" />
+  <title>Maestro</title>
+  <link rel="stylesheet" href="/m/app.css" />
+</head>
+<body>
+  <main id="app" class="shell">
+    <header class="top">
+      <div>
+        <p class="brand">Maestro</p>
+        <h1 id="title">Wallet</h1>
+        <p id="who" class="who" hidden></p>
+      </div>
+      <button id="signout" class="text" type="button" hidden>Sign out</button>
+    </header>
+    <p id="notice" class="notice" hidden></p>
+    <section id="login" class="card login-card">
+      <p class="eyebrow">Welcome back</p>
+      <h2>Sign in</h2>
+      <form id="login-form" class="stack">
+        <label>Email<input name="email" type="email" autocomplete="username" required /></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
+        <button class="primary" type="submit">Sign in</button>
+      </form>
+      <form id="mfa-form" class="stack" hidden>
+        <label>Authentication code<input name="code" inputmode="numeric" autocomplete="one-time-code" required /></label>
+        <button class="primary" type="submit">Confirm</button>
+      </form>
+    </section>
+    <section id="home" hidden>
+      <article class="hero">
+        <p class="label">Available USDT</p>
+        <p id="usdt" class="amount">0.00</p>
+        <p class="muted">TRC20 · balance updates after the payment is confirmed</p>
+        <div class="actions">
+          <button class="primary" type="button" data-open="deposit">Deposit</button>
+          <button class="ghost" type="button" data-open="withdraw">Withdraw</button>
+          <button class="ghost" type="button" data-open="convert">Convert</button>
+        </div>
+      </article>
+      <article class="card coin-card">
+        <div>
+          <p class="label">Project Coin</p>
+          <p id="pcoin" class="coin-amount">0</p>
+          <p id="rate" class="muted"></p>
+        </div>
+        <p id="pcoin-usdt" class="coin-worth"></p>
+      </article>
+      <h2>Accounts</h2>
+      <div id="accounts" class="stack"></div>
+      <h2>Contracts</h2>
+      <div id="contracts" class="stack"></div>
+      <h2>Activity</h2>
+      <div id="activity" class="stack"></div>
+    </section>
+  </main>
+  <div id="sheet" class="sheet" hidden>
+    <button class="sheet-backdrop" type="button" id="close-sheet" aria-label="Close"></button>
+    <section class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="grab"></div>
+      <form id="action-form" class="stack">
+        <h2 id="sheet-title"></h2>
+        <p id="sheet-help" class="muted"></p>
+        <div id="account-pick" class="pick" hidden></div>
+        <div id="available-line" class="available" hidden></div>
+        <div id="chips" class="chips" hidden></div>
+        <label id="amount-label">Amount<input id="amount" name="amount" inputmode="decimal" placeholder="0.00" required /></label>
+        <label id="address-label" hidden>Payout address<input id="address" name="address" autocomplete="off" placeholder="TRC20 address" /></label>
+        <p id="sheet-error" class="error" hidden></p>
+        <button class="primary" type="submit" id="sheet-submit">Continue</button>
+      </form>
+      <div id="receipt" class="stack" hidden>
+        <h2 id="receipt-title">Send USDT</h2>
+        <p id="receipt-amount" class="amount small"></p>
+        <p class="network">Network · TRON (TRC20)</p>
+        <p id="receipt-help" class="muted">Send only USDT on TRC20. Other coins or networks will not be credited.</p>
+        <div id="address-box" class="address-box" hidden>
+          <p class="label">Deposit address</p>
+          <p id="pay-address" class="pay-address"></p>
+          <button class="ghost" type="button" id="copy-address">Copy address</button>
+        </div>
+        <a id="invoice-link" class="primary link-button" hidden target="_blank" rel="noreferrer">Open payment page</a>
+        <p id="receipt-note" class="muted"></p>
+        <button class="ghost" type="button" id="done-receipt">Done</button>
+      </div>
+    </section>
+  </div>
+  <script src="/m/app.js"></script>
+</body>
+</html>

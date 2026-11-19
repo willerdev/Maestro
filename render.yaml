@@ -1,0 +1,34 @@
+# Phone wallet. One web service, existing Neon database, no mining workers.
+# In the Render dashboard set:
+#   DATABASE_URL  the current Neon connection string
+#   MASTER_KEY    the same key the desk uses, or encrypted rows will not open
+#   JWT_SECRET    a long random string
+# Passwords already stored in Neon keep working.
+# ENVIRONMENT stays development while MASTER_KEY is the local desk key.
+# Deposit links use PUBLIC_BASE_URL, so set that to the Render https address.
+
+services:
+  - type: web
+    name: maestro-phone
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: LIGHTWEIGHT
+        value: "1"
+      - key: ENVIRONMENT
+        value: development
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: DATABASE_URL
+        sync: false
+      - key: MASTER_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: COOKIE_SECURE
+        value: "true"

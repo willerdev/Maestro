@@ -1,0 +1,518 @@
+const login = document.querySelector("#login");
+const home = document.querySelector("#home");
+const notice = document.querySelector("#notice");
+const signout = document.querySelector("#signout");
+const sheet = document.querySelector("#sheet");
+const form = document.querySelector("#action-form");
+const receipt = document.querySelector("#receipt");
+let mfaToken = "";
+let homeBody = null;
+let action = null;
+let generation = 0;
+
+function headers(json) {
+  const value = { "X-Tradeguard-Request": "1" };
+  if (json) value["Content-Type"] = "application/json";
+  return value;
+}
+
+function errorText(body, fallback) {
+  const detail = body && body.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const text = detail.map((item) => item.msg || item.message || "").filter(Boolean).join(" ");
+    if (text) return text;
+  }
+  return fallback;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: "include",
+    headers: headers(Boolean(options.body)),
+    ...options,
+  });
+  const text = await response.text();
+  let body = {};
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw new Error("The wallet did not answer. Refresh and try again.");
+    }
+  }
+  if (!response.ok) throw new Error(errorText(body, "That did not go through"));
+  return body;
+}
+
+function showNotice(text) {
+  notice.hidden = !text;
+  notice.textContent = text || "";
+}
+
+function signedIn(on) {
+  login.hidden = on;
+  home.hidden = !on;
+  signout.hidden = !on;
+  document.querySelector("#title").textContent = on ? "Wallet" : "Sign in";
+}
+
+function money(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value || "0");
+  return number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function coinName(value) {
+  if (!value || value === "usdttrc20" || value === "usdt") return "USDT";
+  return String(value).toUpperCase();
+}
+
+function statusText(row) {
+  if (row.direction === "deposit" && row.status === "pending") return "Waiting for payment";
+  if (row.status === "requested") return "Waiting for approval";
+  if (row.status === "pending") return "Sending";
+  if (row.status === "posted") return row.direction === "deposit" ? "Added" : "Sent";
+  if (row.status === "rejected" || row.status === "failed") return "Rejected";
+  return row.status || "";
+}
+
+function statusClass(row) {
+  const text = statusText(row).toLowerCase();
+  if (text === "added" || text === "sent") return "ok";
+  if (text.includes("waiting") || text === "sending") return "wait";
+  return "";
+}
+
+function directionText(row) {
+  if (row.purpose_label) return row.purpose_label;
+  if (row.direction === "withdraw") return "Withdrawal";
+  if (row.direction === "contract") return "Contract";
+  if (row.direction === "expense") return "Expense";
+  return "Deposit";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+function miningAccounts() {
+  return (homeBody?.accounts || []).filter((account) => account.action === "convert");
+}
+
+function accountButton(account) {
+  if (account.action === "convert") return `<button class="ghost" type="button" data-action="convert" data-id="${account.id}">Convert to USDT</button>`;
+  if (account.action === "contract") return `<button class="ghost" type="button" data-action="fund" data-id="${account.id}">Transfer in</button>`;
+  return `<p class="meta">Shown from the broker. Cash moves through the USDT wallet.</p>`;
+}
+
+function render(body) {
+  homeBody = body;
+  document.querySelector("#who").hidden = false;
+  document.querySelector("#who").textContent = body.user.full_name || body.user.email;
+  document.querySelector("#usdt").textContent = money(body.usdt);
+  document.querySelector("#pcoin").textContent = `${body.pcoin} PCoin`;
+  document.querySelector("#pcoin-usdt").textContent = `≈ ${money(body.pcoin_usdt)} USDT`;
+  document.querySelector("#rate").textContent = body.rate || "";
+  document.querySelector("#accounts").innerHTML = body.accounts.map((account) => `
+    <article class="account">
+      <strong>${escapeHtml(account.name)}</strong>
+      <span class="meta">${money(account.balance)} ${account.currency}</span>
+      <span class="pill">${account.status}</span>
+      ${accountButton(account)}
+    </article>
+  `).join("") || `<p class="muted">No accounts on this login.</p>`;
+  document.querySelector("#contracts").innerHTML = body.contracts.map((row) => `
+    <article class="account">
+      <strong>${row.account}</strong>
+      <span class="meta">${money(row.held)} USDT held</span>
+      <span class="pill">${row.status}</span>
+      ${row.can_withdraw ? `<button class="ghost" type="button" data-action="release" data-id="${row.id}">Withdraw to wallet</button>` : `<p class="meta">Locked until ${String(row.unlock_at || "").slice(0, 10)}</p>`}
+    </article>
+  `).join("") || `<p class="muted">No contract transfers.</p>`;
+  const transfers = body.transfers || [];
+  document.querySelector("#activity").innerHTML = transfers.map((row) => `
+    <article class="activity">
+      <strong>${directionText(row)} · ${money(row.amount)} ${coinName(row.currency)}</strong>
+      <span class="pill ${statusClass(row)}">${statusText(row)}</span>
+      ${row.direction === "deposit" && row.status === "pending" ? `<button class="ghost" type="button" data-action="pay" data-id="${row.id}">Show address</button>` : ""}
+    </article>
+  `).join("") || `<p class="muted">Deposits and withdrawals show up here.</p>`;
+}
+
+async function load() {
+  const mine = ++generation;
+  const body = await api("/api/v1/mobile/home");
+  if (mine !== generation) return;
+  signedIn(true);
+  render(body);
+}
+
+function closeSheet() {
+  sheet.hidden = true;
+  document.body.style.overflow = "";
+}
+
+function openSheet(next) {
+  action = next;
+  const titles = { deposit: "Deposit USDT", withdraw: "Withdraw USDT", convert: "Convert Project Coin", fund: "Transfer to contract" };
+  document.querySelector("#sheet-title").textContent = titles[next.kind];
+  document.querySelector("#sheet-help").textContent = next.help || "";
+  const addressLabel = document.querySelector("#address-label");
+  addressLabel.hidden = next.kind !== "withdraw";
+  document.querySelector("#address").required = next.kind === "withdraw";
+  document.querySelector("#amount-label").hidden = false;
+  document.querySelector("#amount").required = true;
+  const chips = document.querySelector("#chips");
+  chips.hidden = next.kind !== "deposit";
+  chips.innerHTML = next.kind === "deposit" ? ["50", "100", "500", "1000"].map((value) => `<button class="ghost" type="button" data-chip="${value}">${value}</button>`).join("") : "";
+  document.querySelector("#sheet-error").hidden = true;
+  document.querySelector("#account-pick").hidden = true;
+  document.querySelector("#available-line").hidden = true;
+  document.querySelector("#sheet-submit").hidden = false;
+  document.querySelector("#sheet-submit").textContent = "Continue";
+  form.hidden = false;
+  receipt.hidden = true;
+  form.reset();
+  sheet.hidden = false;
+  document.body.style.overflow = "hidden";
+  if (next.kind !== "convert") document.querySelector("#amount").focus();
+}
+
+function selectedMining() {
+  return miningAccounts().find((account) => account.id === action?.id) || null;
+}
+
+function usdtFromPcoin(amount) {
+  const rate = Number(homeBody?.rate_value || 1000);
+  const pcoin = Number(amount);
+  if (!rate || !Number.isFinite(pcoin) || pcoin <= 0) return "0";
+  const units = Math.floor((pcoin / rate) * 1000000);
+  const whole = Math.floor(units / 1000000);
+  const frac = String(units % 1000000).padStart(6, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : String(whole);
+}
+
+function openConvert(accountId) {
+  const accounts = miningAccounts();
+  if (!accounts.length) {
+    showNotice("This login has no Project Coin account.");
+    return;
+  }
+  const chosen = accounts.find((account) => account.id === accountId);
+  action = { kind: "convert", step: chosen ? "amount" : "pick", id: chosen ? chosen.id : "" };
+  document.querySelector("#address-label").hidden = true;
+  document.querySelector("#address").required = false;
+  document.querySelector("#sheet-error").hidden = true;
+  form.hidden = false;
+  receipt.hidden = true;
+  form.reset();
+  sheet.hidden = false;
+  document.body.style.overflow = "hidden";
+  showConvert();
+}
+
+function showConvert() {
+  const pick = document.querySelector("#account-pick");
+  const available = document.querySelector("#available-line");
+  const amountLabel = document.querySelector("#amount-label");
+  const amount = document.querySelector("#amount");
+  const chips = document.querySelector("#chips");
+  const submit = document.querySelector("#sheet-submit");
+  const account = selectedMining();
+  document.querySelector("#sheet-title").textContent = "Convert Project Coin";
+  pick.hidden = action.step !== "pick";
+  available.hidden = action.step === "pick";
+  amountLabel.hidden = action.step !== "amount";
+  amount.required = action.step === "amount";
+  chips.hidden = action.step !== "amount";
+  submit.hidden = action.step === "pick";
+  submit.textContent = action.step === "confirm" ? "Confirm conversion" : "Continue";
+  if (action.step === "pick") {
+    document.querySelector("#sheet-help").textContent = "Choose the Project Coin account to convert from.";
+    pick.innerHTML = miningAccounts().map((row) => `
+      <button type="button" data-pick="${row.id}">
+        <strong>${escapeHtml(row.name)}</strong>
+        <span>${escapeHtml(row.balance)} PCoin available</span>
+      </button>
+    `).join("");
+    return;
+  }
+  if (!account) {
+    action.step = "pick";
+    showConvert();
+    return;
+  }
+  const change = miningAccounts().length > 1 ? `<button class="text" type="button" id="change-account">Change account</button>` : "";
+  if (action.step === "amount") {
+    document.querySelector("#sheet-help").textContent = `Minimum ${homeBody?.min_pcoin || "1000"} PCoin. ${homeBody?.rate || ""}`;
+    available.innerHTML = `<span class="label">Available on ${escapeHtml(account.name)}</span><strong>${escapeHtml(account.balance)} PCoin</strong><span class="muted">${escapeHtml(homeBody?.rate || "")}</span>${change}`;
+    chips.innerHTML = `<button class="ghost" type="button" data-chip="all">Use all available</button>`;
+    amount.placeholder = "PCoin to convert";
+    amount.focus();
+    return;
+  }
+  document.querySelector("#sheet-help").textContent = "This moves PCoin from the account into USDT on the wallet.";
+  const fee = Number(homeBody?.fee_bps || 0);
+  const feeLine = fee ? `<span class="muted">Fee ${fee / 100}% is added to the PCoin used.</span>` : "";
+  available.innerHTML = `
+    <span class="label">${escapeHtml(account.name)}</span>
+    <strong>${escapeHtml(action.amount)} PCoin</strong>
+    <span class="muted">You receive ${escapeHtml(action.usdt)} USDT</span>
+    ${feeLine}
+    <button class="text" type="button" id="change-amount">Change amount</button>
+    ${change}
+  `;
+}
+
+function showReceipt(row) {
+  form.hidden = true;
+  receipt.hidden = false;
+  document.querySelector("#receipt-title").textContent = "Send USDT";
+  document.querySelector("#receipt-amount").textContent = `${money(row.amount)} ${coinName(row.currency)}`;
+  const address = String(row.address || "").trim();
+  document.querySelector("#address-box").hidden = !address;
+  document.querySelector("#pay-address").textContent = address;
+  const link = document.querySelector("#invoice-link");
+  if (row.invoice_url) {
+    link.hidden = false;
+    link.href = row.invoice_url;
+  } else {
+    link.hidden = true;
+    link.removeAttribute("href");
+  }
+  document.querySelector("#receipt-note").textContent = address
+    ? "The USDT is added after the network confirms this payment."
+    : "No deposit address came back. Open the payment page, or try the amount again.";
+  sheet.hidden = false;
+  document.body.style.overflow = "hidden";
+}
+
+const loginForm = document.querySelector("#login-form");
+const loginButton = loginForm.querySelector("button");
+let signingIn = false;
+
+function press(button) {
+  button.addEventListener("pointerdown", () => button.classList.add("pressed"));
+  button.addEventListener("pointerup", () => button.classList.remove("pressed"));
+  button.addEventListener("pointercancel", () => button.classList.remove("pressed"));
+}
+press(loginButton);
+
+loginForm.addEventListener("invalid", (event) => {
+  event.preventDefault();
+  showNotice(event.target.validationMessage || "Enter your email and password.");
+}, true);
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (signingIn) return;
+  signingIn = true;
+  const data = new FormData(loginForm);
+  loginButton.disabled = true;
+  loginButton.textContent = "Signing in…";
+  showNotice("Signing in…");
+  try {
+    const body = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email: String(data.get("email") || "").trim(), password: data.get("password") }),
+    });
+    if (body.mfa_required) {
+      mfaToken = body.mfa_token;
+      document.querySelector("#mfa-form").hidden = false;
+      showNotice("Enter the authentication code.");
+      return;
+    }
+    signedIn(true);
+    document.querySelector("#who").hidden = false;
+    document.querySelector("#who").textContent = (body.user && (body.user.full_name || body.user.email)) || "";
+    showNotice("Loading your wallet…");
+    await load();
+    showNotice("");
+  } catch (error) {
+    if (!home.hidden) showNotice(`${error.message} Pull to refresh, or sign in again.`);
+    else showNotice(error.message);
+  } finally {
+    signingIn = false;
+    loginButton.disabled = false;
+    loginButton.textContent = "Sign in";
+  }
+});
+
+document.querySelector("#mfa-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector("button");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "Checking…";
+  showNotice("Checking the code…");
+  const data = new FormData(event.currentTarget);
+  try {
+    await api("/api/v1/auth/mfa", { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code: data.get("code") }) });
+    signedIn(true);
+    showNotice("Loading your wallet…");
+    await load();
+    showNotice("");
+  } catch (error) {
+    showNotice(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Confirm";
+  }
+});
+
+signout.addEventListener("click", async () => {
+  generation += 1;
+  await api("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
+  signedIn(false);
+  document.querySelector("#who").hidden = true;
+});
+
+home.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const kind = button.dataset.open || button.dataset.action;
+  if (kind === "deposit") {
+    if (homeBody && homeBody.payments_ready === false) {
+      showNotice("Deposits are not ready on this wallet yet.");
+      return;
+    }
+    openSheet({ kind, help: "Enter the USDT amount. The next screen shows the TRC20 address to pay." });
+  }
+  if (kind === "withdraw") openSheet({ kind, help: "The request waits for approval. The amount stays held until it is sent or rejected." });
+  if (kind === "convert") openConvert(button.dataset.id || "");
+  if (kind === "fund") openSheet({ kind, id: button.dataset.id, help: "Moves USDT from the wallet onto this contract." });
+  if (kind === "release") {
+    api("/api/v1/mobile/contracts/withdraw", { method: "POST", body: JSON.stringify({ stake_id: button.dataset.id }) })
+      .then((body) => { showNotice(`Returned ${body.returned} USDT to the wallet.`); return load(); })
+      .catch((error) => showNotice(error.message));
+  }
+  if (kind === "pay") {
+    const row = (homeBody?.transfers || []).find((item) => item.id === button.dataset.id);
+    if (row) showReceipt(row);
+  }
+});
+
+document.querySelector("#chips").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-chip]");
+  if (!button) return;
+  if (button.dataset.chip === "all") {
+    const account = selectedMining();
+    document.querySelector("#amount").value = account ? account.balance : "";
+    return;
+  }
+  document.querySelector("#amount").value = button.dataset.chip;
+});
+
+form.addEventListener("click", (event) => {
+  const pick = event.target.closest("[data-pick]");
+  if (pick && action?.kind === "convert") {
+    action.id = pick.dataset.pick;
+    action.step = "amount";
+    showConvert();
+    return;
+  }
+  if (event.target.closest("#change-account") && action?.kind === "convert") {
+    action.step = "pick";
+    action.id = "";
+    showConvert();
+    return;
+  }
+  if (event.target.closest("#change-amount") && action?.kind === "convert") {
+    action.step = "amount";
+    showConvert();
+  }
+});
+
+document.querySelector("#close-sheet").addEventListener("click", closeSheet);
+document.querySelector("#done-receipt").addEventListener("click", () => {
+  closeSheet();
+  load().catch((error) => showNotice(error.message));
+});
+
+document.querySelector("#copy-address").addEventListener("click", async () => {
+  const text = document.querySelector("#pay-address").textContent.trim();
+  if (!text) return;
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+    else {
+      const area = document.createElement("textarea");
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    document.querySelector("#copy-address").textContent = "Copied";
+  } catch {
+    document.querySelector("#copy-address").textContent = "Select the address and copy it";
+  }
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = document.querySelector("#sheet-error");
+  error.hidden = true;
+  const data = new FormData(form);
+  const amount = String(data.get("amount") || "").trim().replace(/,/g, "");
+  if (!amount || Number(amount) <= 0) {
+    error.hidden = false;
+    error.textContent = "Enter an amount greater than 0.";
+    return;
+  }
+  const submit = document.querySelector("#sheet-submit");
+  submit.disabled = true;
+  try {
+    if (action.kind === "deposit") {
+      const body = await api("/api/v1/mobile/deposit", { method: "POST", body: JSON.stringify({ amount }) });
+      showReceipt(body);
+      showNotice("");
+    } else if (action.kind === "withdraw") {
+      await api("/api/v1/mobile/withdraw", { method: "POST", body: JSON.stringify({ amount, address: data.get("address"), currency: "usdttrc20" }) });
+      showNotice("Withdrawal requested. It waits for approval.");
+      closeSheet();
+    } else if (action.kind === "convert" && action.step === "amount") {
+      const account = selectedMining();
+      const available = Number(String(account?.balance || "0").replace(/,/g, ""));
+      const minimum = Number(homeBody?.min_pcoin || 0);
+      if (minimum && Number(amount) < minimum) {
+        error.hidden = false;
+        error.textContent = `The minimum is ${homeBody.min_pcoin} PCoin.`;
+        return;
+      }
+      if (Number.isFinite(available) && Number(amount) > available) {
+        error.hidden = false;
+        error.textContent = `Available on ${account?.name || "this account"} is ${account?.balance || "0"} PCoin.`;
+        return;
+      }
+      action.amount = amount;
+      action.usdt = usdtFromPcoin(amount);
+      if (action.usdt === "0") {
+        error.hidden = false;
+        error.textContent = "That amount is too small to convert.";
+        return;
+      }
+      action.step = "confirm";
+      showConvert();
+      return;
+    } else if (action.kind === "convert") {
+      const body = await api("/api/v1/mobile/convert", { method: "POST", body: JSON.stringify({ amount }) });
+      const account = selectedMining();
+      showNotice(`Converted ${body.pcoin} PCoin from ${account?.name || "Project Coin"} to ${body.usdt} USDT.`);
+      closeSheet();
+    } else if (action.kind === "fund") {
+      const body = await api("/api/v1/mobile/contracts/fund", { method: "POST", body: JSON.stringify({ account_id: action.id, amount }) });
+      showNotice(`Transferred ${body.position.principal} USDT to the contract.`);
+      closeSheet();
+    }
+    await load();
+  } catch (err) {
+    error.hidden = false;
+    error.textContent = err.message;
+  } finally {
+    submit.disabled = false;
+    document.querySelector("#copy-address").textContent = "Copy address";
+  }
+});
+
+load().catch(() => {});

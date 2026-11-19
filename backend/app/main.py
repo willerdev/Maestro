@@ -3,9 +3,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.platform import metrics as metrics_endpoint
 from app.api.v1.platform import ready as ready_endpoint
@@ -21,6 +24,7 @@ from app.api.v1.pocketoption import router as pocketoption_router
 from app.api.v1.chain import router as chain_router
 from app.api.v1.extra_wallets import router as extra_wallets_router
 from app.api.v1.contracts import router as contracts_router
+from app.api.v1.mobile import router as mobile_router
 from app.api.v1.admin_users import router as admin_users_router
 from app.api.v1.setup_routes import router as setup_router
 from app.core.telemetry import RequestTimer, telemetry
@@ -32,11 +36,17 @@ from app.services.ingest_service import sweep_heartbeats
 from app.services.seed import seed_admin, seed_sample
 
 logger = logging.getLogger(__name__)
+_MOBILE = Path(__file__).resolve().parent / "mobile"
 
 
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
+    if settings.environment == "production":
+        if settings.jwt_secret in {"change-me", "replace-with-a-long-random-string"}:
+            raise RuntimeError("Set JWT_SECRET to a long random value before running production")
+        if not settings.master_key or settings.master_key == settings.local_dev_master_key:
+            raise RuntimeError("Set a unique MASTER_KEY before running production")
     app = FastAPI(title="Maestro", version="0.1.0", docs_url="/docs", redoc_url="/redoc")
     app.add_middleware(
         CORSMiddleware,
@@ -58,7 +68,9 @@ def create_app() -> FastAPI:
     app.include_router(chain_router, prefix="/api/v1")
     app.include_router(extra_wallets_router, prefix="/api/v1")
     app.include_router(contracts_router, prefix="/api/v1")
+    app.include_router(mobile_router, prefix="/api/v1")
     app.include_router(admin_users_router, prefix="/api/v1")
+    app.mount("/m", StaticFiles(directory=str(_MOBILE), html=True), name="mobile")
 
     @app.middleware("http")
     async def observe_request(request, call_next):
@@ -78,6 +90,11 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def root_health() -> dict:
         return {"status": "ok", "service": "maestro"}
+
+    if settings.lightweight:
+        @app.get("/")
+        def phone_home():
+            return RedirectResponse("/m/")
 
     @app.get("/ready")
     def root_ready(db=Depends(get_db)):
@@ -101,9 +118,27 @@ def create_app() -> FastAPI:
         except Exception:
             db.rollback()
             logger.exception("startup_seed_failed")
+        try:
+            from app.services.license_service import ensure_pool
+
+            ensure_pool(db)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("license_pool_failed")
         finally:
             db.close()
-        if settings.environment != "test":
+        if settings.environment != "test" and not settings.lightweight:
+            try:
+                from app.services.chain_service import resume_capped_miners
+
+                boot = SessionLocal()
+                try:
+                    resume_capped_miners(boot)
+                finally:
+                    boot.close()
+            except Exception:
+                logger.exception("capped_miner_resume_failed")
             threading.Thread(target=_heartbeat_loop, name="heartbeat-sweep", daemon=True).start()
             threading.Thread(target=_live_book_loop, name="live-book", daemon=True).start()
             threading.Thread(target=_telegram_trade_loop, name="telegram-trades", daemon=True).start()

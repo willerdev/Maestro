@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     chain_fee: str = "0.001"
     chain_cpu_percent: int = 20
     chain_cpu_max: int = 50
+    lightweight: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
