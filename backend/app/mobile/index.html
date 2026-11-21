@@ -43,6 +43,7 @@
       </div>
     </section>
     <section id="home" hidden>
+    <nav id="subnav" class="subnav" hidden></nav>
     <div data-panel="wallet">
       <article class="hero">
         <p class="label">Available USDT</p>
@@ -69,8 +70,20 @@
       </div>
       <p class="muted">Contracts and MetaTrader details can be added here. Other account types are added in the desk software.</p>
       <div id="accounts" class="stack"></div>
-      <h2>Contract transfers</h2>
+    </div>
+    <div data-panel="trades" hidden>
+      <div id="trades" class="stack"></div>
+    </div>
+    <div data-panel="journal" hidden>
+      <div id="journal" class="stack"></div>
+    </div>
+    <div data-panel="contracts" hidden>
+      <p class="muted">Transfer USDT from the wallet onto a contract. Funds stay on the contract for 7 days.</p>
       <div id="contracts" class="stack"></div>
+    </div>
+    <div data-panel="passprops" hidden>
+      <p class="muted">Pass Props accounts are added in the desk software. $100 USDT is returned if a challenge is breached.</p>
+      <div id="passprops" class="stack"></div>
     </div>
     <div data-panel="coin" hidden>
       <article class="card coin-card">
@@ -83,6 +96,26 @@
       </article>
       <button class="primary add-one" type="button" data-open="add-coin">Add Project Coin</button>
       <div id="coin-accounts" class="stack"></div>
+    </div>
+    <div data-panel="payments" hidden>
+      <div id="payments" class="stack"></div>
+    </div>
+    <div data-panel="telegram" hidden>
+      <div id="telegram" class="stack"></div>
+    </div>
+    <div data-panel="webhooks" hidden>
+      <p class="muted">Webhook secrets are shown once in the desk software and are not listed here.</p>
+      <div id="webhooks" class="stack"></div>
+    </div>
+    <div data-panel="approvals" hidden>
+      <h2>Project Coin</h2>
+      <div id="approval-credits" class="stack"></div>
+      <h2>Withdrawals</h2>
+      <div id="approval-withdrawals" class="stack"></div>
+      <h2>Applications</h2>
+      <div id="approval-applications" class="stack"></div>
+      <h2>Capital</h2>
+      <div id="approval-capital" class="stack"></div>
     </div>
     <div data-panel="password" hidden>
       <article class="card">
@@ -132,10 +165,10 @@
     </section>
   </div>
   <nav id="menu" class="menu" hidden>
-    <button type="button" data-view="wallet">Wallet</button>
-    <button type="button" data-view="accounts">Accounts</button>
-    <button type="button" data-view="coin">Project Coin</button>
-    <button type="button" data-view="password">Password</button>
+    <button type="button" data-group="trading">Trading</button>
+    <button type="button" data-group="wallet">Wallet</button>
+    <button type="button" data-group="connect">Connect</button>
+    <button type="button" data-group="more">More</button>
   </nav>
   <script src="/m/app.js"></script>
 </body>

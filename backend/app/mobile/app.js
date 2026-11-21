@@ -111,14 +111,100 @@ function miningAccounts() {
   return (homeBody?.accounts || []).filter((account) => account.action === "convert");
 }
 
+const SECTIONS = {
+  trading: [["accounts", "Accounts"], ["trades", "Trades"], ["journal", "Journal"]],
+  wallet: [["wallet", "Wallet"]],
+  connect: [["contracts", "Contracts"], ["passprops", "Pass Props"], ["coin", "Project Coin"], ["payments", "Payments"], ["telegram", "Telegram"], ["webhooks", "Webhooks"]],
+  more: [["approvals", "Approvals"], ["password", "Password"]],
+};
+const TITLES = { wallet: "Wallet", accounts: "Accounts", trades: "Trades", journal: "Journal", contracts: "Contracts", passprops: "Pass Props", coin: "Project Coin", payments: "Payments", telegram: "Telegram", webhooks: "Webhooks", approvals: "Approvals", password: "Password" };
+
+function groupFor(section) {
+  return Object.keys(SECTIONS).find((group) => SECTIONS[group].some(([id]) => id === section)) || "wallet";
+}
+
+function visibleItems(group) {
+  return SECTIONS[group].filter(([id]) => (id !== "webhooks" && id !== "approvals") || Boolean(homeBody?.user?.admin));
+}
+
 function showView(name) {
+  const group = groupFor(name);
+  const items = visibleItems(group);
+  const section = items.some(([id]) => id === name) ? name : items[0][0];
   document.querySelectorAll("[data-panel]").forEach((panel) => {
-    panel.hidden = panel.dataset.panel !== name;
+    panel.hidden = panel.dataset.panel !== section;
   });
   document.querySelectorAll("#menu button").forEach((button) => {
-    button.classList.toggle("on", button.dataset.view === name);
+    button.classList.toggle("on", button.dataset.group === group);
   });
-  document.querySelector("#title").textContent = { wallet: "Wallet", accounts: "Accounts", coin: "Project Coin", password: "Password" }[name] || "Wallet";
+  const subnav = document.querySelector("#subnav");
+  subnav.hidden = items.length < 2;
+  subnav.innerHTML = items.map(([id, label]) => `<button type="button" data-section="${id}" class="${id === section ? "on" : ""}">${label}</button>`).join("");
+  document.querySelector("#title").textContent = TITLES[section] || "Wallet";
+  const loaders = { trades: loadTrades, journal: loadJournal, passprops: loadPassProps, payments: loadPayments, telegram: loadTelegram, webhooks: loadWebhooks, approvals: loadApprovals };
+  if (loaders[section]) loaders[section]().catch((error) => showNotice(error.message));
+}
+
+function listOrEmpty(rows, card, empty) {
+  return rows.length ? rows.map(card).join("") : `<p class="muted">${empty}</p>`;
+}
+
+async function loadTrades() {
+  const body = await api("/api/v1/trades");
+  const rows = body.trades || [];
+  document.querySelector("#trades").innerHTML = listOrEmpty(rows, (row) => `
+    <article class="account">
+      <strong>${escapeHtml(row.symbol)} · ${escapeHtml(row.direction)}</strong>
+      <span class="meta">${escapeHtml(row.account_name || "")} · lot ${escapeHtml(row.lot)}</span>
+      <span class="pill">${escapeHtml(row.floating_pl ?? "")}</span>
+    </article>`, "No open trades.");
+}
+
+async function loadJournal() {
+  const accounts = await api("/api/v1/journal/accounts");
+  if (!accounts.length) {
+    document.querySelector("#journal").innerHTML = `<p class="muted">No trading account to journal yet.</p>`;
+    return;
+  }
+  const journal = await api(`/api/v1/journal?account_id=${accounts[0].id}`);
+  const summary = journal.summary || {};
+  const days = (journal.days || []).slice(0, 8);
+  document.querySelector("#journal").innerHTML = `
+    <article class="account"><strong>${escapeHtml(journal.account_name || accounts[0].display_name)}</strong><span class="meta">Net ${escapeHtml(summary.net || "0")} ${escapeHtml(journal.currency || "")} · ${escapeHtml(summary.trades || 0)} trades</span></article>
+    ${listOrEmpty(days, (day) => `<article class="account"><strong>${escapeHtml(String(day.date).slice(0, 10))}</strong><span class="meta">${escapeHtml(day.trade_count)} trades · ${escapeHtml(day.net)}</span><span class="pill ${day.result === "profit" ? "ok" : day.result === "loss" ? "wait" : ""}">${escapeHtml(day.result)}</span></article>`, "No closed days yet.")}`;
+}
+
+async function loadPassProps() {
+  const rows = (await api("/api/v1/accounts")).filter((row) => row.connection_method === "passprop");
+  document.querySelector("#passprops").innerHTML = listOrEmpty(rows, (row) => `
+    <article class="account">
+      <strong>${escapeHtml(row.passprop?.firm_name || row.display_name)}</strong>
+      <span class="meta">${escapeHtml(row.passprop?.account_size || row.account_number)} · ${escapeHtml(row.equity || "")} ${escapeHtml(row.currency || "")}</span>
+      <span class="pill">${escapeHtml(row.status)}</span>
+    </article>`, "No Pass Props account yet. Add one in the desk software.");
+}
+
+async function loadPayments() {
+  const rows = await api("/api/v1/payments");
+  document.querySelector("#payments").innerHTML = listOrEmpty(rows, (row) => `
+    <article class="account">
+      <strong>${escapeHtml(row.purpose || "Payment")} · ${escapeHtml(row.price_amount)} ${escapeHtml(row.price_currency)}</strong>
+      <span class="meta">${escapeHtml(row.provider || "")}</span>
+      <span class="pill">${escapeHtml(row.status)}</span>
+    </article>`, "No payments yet.");
+}
+
+async function loadTelegram() {
+  const body = await api("/api/v1/telegram");
+  document.querySelector("#telegram").innerHTML = `
+    <article class="account"><strong>Telegram</strong><span class="meta">${body.account_connected ? "Phone is signed in" : "Phone is not signed in"}</span><span class="pill">${body.auto_execute ? "Auto execute on" : "Auto execute off"}</span></article>
+    <p class="muted">Signing in and choosing signal chats stays in the desk software.</p>`;
+}
+
+async function loadWebhooks() {
+  const rows = (await api("/api/v1/accounts")).filter((row) => row.connection_method === "webhook");
+  document.querySelector("#webhooks").innerHTML = listOrEmpty(rows, (row) => `
+    <article class="account"><strong>${escapeHtml(row.display_name)}</strong><span class="meta">${escapeHtml(row.account_number)}</span><span class="pill">${escapeHtml(row.status)}</span></article>`, "No webhook accounts.");
 }
 
 function accountButton(account) {
@@ -433,8 +519,14 @@ document.querySelector("#mfa-form").addEventListener("submit", async (event) => 
 
 document.querySelector("#menu").addEventListener("click", (event) => {
   const button = event.target.closest("button");
-  if (!button) return;
-  showView(button.dataset.view);
+  if (!button?.dataset.group) return;
+  const items = visibleItems(button.dataset.group);
+  showView(items[0][0]);
+});
+
+document.querySelector("#subnav").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (button?.dataset.section) showView(button.dataset.section);
 });
 
 document.querySelector("#password-form").addEventListener("submit", async (event) => {
@@ -474,9 +566,34 @@ signout.addEventListener("click", async () => {
   document.querySelector("#who").hidden = true;
 });
 
+function approvalCard(row, kind, title, detail) {
+  return `<article class="account"><strong>${escapeHtml(title)}</strong><span class="meta">${escapeHtml(detail)}</span><div class="actions add-actions"><button class="primary" type="button" data-review="${kind}" data-decision="approve" data-id="${row.id}">Approve</button><button class="ghost" type="button" data-review="${kind}" data-decision="reject" data-id="${row.id}">Reject</button></div></article>`;
+}
+
+async function loadApprovals() {
+  const body = await api("/api/v1/mobile/approvals");
+  const fill = (id, rows, card) => {
+    document.querySelector(id).innerHTML = rows.length ? rows.map(card).join("") : `<p class="muted">Nothing waiting.</p>`;
+  };
+  fill("#approval-credits", body.credits || [], (row) => approvalCard(row, "credits", row.full_name || row.email, `${row.amount} PCoin · ${row.source}`));
+  fill("#approval-withdrawals", body.withdrawals || [], (row) => approvalCard(row, "withdrawals", row.full_name || row.email, `${money(row.amount)} ${coinName(row.currency)}`));
+  fill("#approval-applications", body.applications || [], (row) => approvalCard(row, "applications", row.full_name || row.email, row.kind));
+  fill("#approval-capital", body.capital || [], (row) => approvalCard(row, "capital", row.email, `${money(row.amount)} · ${row.fund || row.kind}`));
+}
+
 home.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
+  if (button.dataset.review) {
+    button.disabled = true;
+    api(`/api/v1/mobile/approvals/${button.dataset.review}/${button.dataset.id}`, { method: "POST", body: JSON.stringify({ decision: button.dataset.decision }) })
+      .then(() => {
+        showNotice(button.dataset.decision === "approve" ? "Approved." : "Rejected.");
+        return loadApprovals();
+      })
+      .catch((error) => showNotice(error.message));
+    return;
+  }
   const kind = button.dataset.open || button.dataset.action;
   if (kind === "deposit") {
     if (homeBody && homeBody.payments_ready === false) {
