@@ -59,8 +59,7 @@ function signedIn(on) {
   document.querySelector("#menu").hidden = !on;
   if (opening) showView("wallet");
   else if (!on) document.querySelector("#title").textContent = "Sign in";
-  const theme = document.querySelector('meta[name="theme-color"]');
-  if (theme) theme.setAttribute("content", on ? "#071018" : (document.body.classList.contains("gate-dark") ? "#0e1217" : "#f4f6f8"));
+  paintTheme();
 }
 
 const savedTheme = localStorage.getItem("maestro-phone-theme") === "dark" ? "dark" : "light";
@@ -155,6 +154,21 @@ function showView(name) {
   document.querySelector("#title").textContent = TITLES[section] || "Wallet";
   const loaders = { funds: loadFunds, trades: loadTrades, journal: loadJournal, passprops: loadPassProps, payments: loadPayments, telegram: loadTelegram, webhooks: loadWebhooks, approvals: loadApprovals };
   if (loaders[section]) loaders[section]().catch((error) => showNotice(error.message));
+}
+
+async function loadBooks() {
+  const card = document.querySelector("#books-card");
+  const box = document.querySelector("#books");
+  try {
+    const [ledger, funds] = await Promise.all([api("/api/v1/ledger"), api("/api/v1/funds")]);
+    const accounts = ledger.accounts || [];
+    const lines = accounts.map((row) => `<p class="meta">${escapeHtml(row.code)} ${escapeHtml(row.name)} · ${escapeHtml(row.balance)}</p>`);
+    const fundLines = (funds || []).map((fund) => `<p class="meta">${escapeHtml(fund.name)} · ${escapeHtml(fund.aum)} ${escapeHtml(fund.base_currency)} · unit ${escapeHtml(fund.unit_price)}</p>`);
+    box.innerHTML = [`<strong>${ledger.balanced ? "Books balanced" : "Books out of balance"}</strong>`, ...lines, ...fundLines].join("") || `<p class="muted">No posted movements yet.</p>`;
+    card.hidden = false;
+  } catch {
+    card.hidden = true;
+  }
 }
 
 async function loadFunds() {
@@ -338,6 +352,7 @@ function render(body) {
     </article>
   `).join("") || `<p class="muted">No contract transfers.</p>`;
   const transfers = body.transfers || [];
+  loadBooks();
   document.querySelector("#activity").innerHTML = transfers.map((row) => {
     const inbound = incomingTransfer(row);
     const side = inbound ? "in" : "out";
@@ -535,13 +550,21 @@ function press(button) {
 }
 press(loginButton);
 
-document.querySelector("#theme-toggle").addEventListener("click", () => {
-  const dark = !document.body.classList.contains("gate-dark");
-  document.body.classList.toggle("gate-dark", dark);
-  localStorage.setItem("maestro-phone-theme", dark ? "dark" : "light");
+function paintTheme() {
+  const dark = document.body.classList.contains("gate-dark");
   const theme = document.querySelector('meta[name="theme-color"]');
-  if (theme && !document.body.classList.contains("in")) theme.setAttribute("content", dark ? "#0e1217" : "#f4f6f8");
+  if (theme) theme.setAttribute("content", dark ? "#0b1220" : "#e8eef5");
+}
+
+document.querySelectorAll(".theme-toggle").forEach((button) => {
+  button.addEventListener("click", () => {
+    const dark = !document.body.classList.contains("gate-dark");
+    document.body.classList.toggle("gate-dark", dark);
+    localStorage.setItem("maestro-phone-theme", dark ? "dark" : "light");
+    paintTheme();
+  });
 });
+paintTheme();
 
 function showLoginError(text) {
   loginError.hidden = !text;

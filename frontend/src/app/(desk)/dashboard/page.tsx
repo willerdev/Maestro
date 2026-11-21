@@ -41,6 +41,8 @@ export default function DashboardPage() {
   const [me, setMe] = useState<User | null>(null);
   const [licenseBusy, setLicenseBusy] = useState(false);
   const [licenseError, setLicenseError] = useState("");
+  const [books, setBooks] = useState<{ balanced: boolean; accounts: { code: string; name: string; balance: string }[] } | null>(null);
+  const [funds, setFunds] = useState<{ id: string; name: string; aum: string; base_currency: string; unit_price: string; units_outstanding: string }[]>([]);
   const own = me ? !isSystemAdmin(me.roles) : true;
 
   useEffect(() => {
@@ -51,6 +53,12 @@ export default function DashboardPage() {
     apiJson<Operating>("/api/v1/operating-status")
       .then(setOperating)
       .catch(() => undefined);
+    apiJson<{ balanced: boolean; accounts: { code: string; name: string; balance: string }[] }>("/api/v1/ledger")
+      .then(setBooks)
+      .catch(() => setBooks(null));
+    apiJson<{ id: string; name: string; aum: string; base_currency: string; unit_price: string; units_outstanding: string }[]>("/api/v1/funds")
+      .then(setFunds)
+      .catch(() => setFunds([]));
     Promise.all([apiJson<Summary>("/api/v1/dashboard/summary"), apiJson<Charts>("/api/v1/dashboard/charts")])
       .then(([sum, chart]) => {
         setSummary(sum);
@@ -114,6 +122,33 @@ export default function DashboardPage() {
         </p>
       ) : null}
       <>
+          {books ? (
+            <section className="kpi-band">
+              <h2>Ledger {books.balanced ? "· balanced" : "· out of balance"}</h2>
+              <div className="kpi-grid">
+                {books.accounts.length ? books.accounts.map((row) => (
+                  <Kpi key={row.code} label={`${row.code} ${row.name}`} value={row.balance} />
+                )) : <Kpi label="Ledger" value="No posted movements" />}
+              </div>
+              {funds.length ? (
+                <div className="book overflow-x-auto mt-3">
+                  <table>
+                    <thead><tr><th>Fund</th><th>Equity</th><th>Unit price</th><th>Units</th></tr></thead>
+                    <tbody>
+                      {funds.map((fund) => (
+                        <tr key={fund.id}>
+                          <td><Link href={`/funds/${fund.id}`}>{fund.name}</Link></td>
+                          <td className="num">{fund.aum} {fund.base_currency}</td>
+                          <td className="num">{fund.unit_price}</td>
+                          <td className="num">{fund.units_outstanding}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
           <section className="kpi-band">
             <h2>Performance window</h2>
             <div className="kpi-grid">
