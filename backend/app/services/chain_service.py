@@ -235,6 +235,12 @@ def wallet_view(db: Session, org_id, user_id) -> dict:
 
     spendable = max(0, ledger.available(row.address) - held + bonus - held_pcoin_atomic(db, org_id, user_id))
     rules = public_settings(db, org_id)
+    from app.services.asset_service import _available
+
+    owner = db.get(User, user_id)
+    cash = Decimal("0")
+    if owner is not None:
+        cash = _available(db, owner, "usdttrc20") + _available(db, owner, "usdt")
     return {
         "address": row.address,
         "public_key": row.public_key,
@@ -251,7 +257,7 @@ def wallet_view(db: Session, org_id, user_id) -> dict:
         "pow_mined": format_amount(totals["mined"]),
         "market_value": None,
         "converted": format_amount(held),
-        "usdt_available": format_usdt(usdt_balance(db, org_id, user_id)),
+        "usdt_available": format(cash.quantize(Decimal("0.01")), "f"),
         "usdt_total": format_usdt(usdt_balance(db, org_id, user_id)),
         "exchange_rate": rules["rate"],
         "exchange_label": rules["label"],
