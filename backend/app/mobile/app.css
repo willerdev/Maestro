@@ -6,7 +6,7 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; min-height: 100vh; background: radial-gradient(120% 60% at 50% -10%, #17324a 0%, #071018 46%); }
+body { margin: 0; min-height: 100vh; background: radial-gradient(120% 60% at 50% -10%, #1a3f73 0%, #071018 46%); }
 .shell { width: min(100%, 34rem); margin: 0 auto; padding: max(1rem, env(safe-area-inset-top)) 1rem calc(2.5rem + env(safe-area-inset-bottom)); }
 .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.8rem; }
 .brand { margin: 0; color: #8fb4c9; font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase; }
@@ -107,7 +107,7 @@ body.gate-dark:not(.in) .gate-card .enter { background: #6b93e8; }
 .amount.small { font-size: 1.8rem; }
 .muted { margin: 0; color: #8ea3b3; font-size: 0.86rem; line-height: 1.4; }
 .notice, .error { border-radius: 14px; padding: 0.75rem 0.85rem; margin: 0 0 0.75rem; }
-.notice { background: #123528; color: #c8f5dc; }
+.notice { background: #163056; color: #d6e4ff; }
 .error { background: #3a1c22; color: #ffb4b4; }
 label { display: grid; gap: 0.35rem; font-size: 0.88rem; color: #d5e2ee; }
 input, button { font: inherit; }
@@ -123,7 +123,7 @@ button, input, label { touch-action: manipulation; }
 button { border: 0; border-radius: 14px; padding: 0.9rem 1rem; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button:active, button.pressed { transform: scale(0.97); }
 button:disabled { opacity: 0.72; }
-.primary { background: #3dd6a5; color: #062117; font-weight: 700; }
+.primary { background: #3d6fd8; color: #ffffff; font-weight: 700; }
 .ghost, .text { background: rgba(255, 255, 255, 0.04); color: #e7f0f6; border: 1px solid rgba(143, 180, 201, 0.2); }
 .text { border: 0; background: transparent; padding: 0.35rem 0; color: #9eb4c4; }
 .actions { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 0.5rem; margin-top: 0.95rem; }
@@ -146,10 +146,10 @@ button:disabled { opacity: 0.72; }
   border-top: 1px solid rgba(143, 180, 201, 0.16);
 }
 .menu button { background: transparent; color: #9eb4c4; border: 0; border-radius: 12px; padding: 0.55rem 0.15rem; font-size: 0.72rem; }
-.menu button.on { background: #3dd6a5; color: #062117; font-weight: 700; }
+.menu button.on { background: #3d6fd8; color: #ffffff; font-weight: 700; }
 .subnav { display: flex; gap: 0.4rem; overflow-x: auto; margin: 0 0 0.85rem; }
 .subnav button { flex: none; background: rgba(255, 255, 255, 0.04); color: #d5e2ee; border: 1px solid rgba(143, 180, 201, 0.2); border-radius: 999px; padding: 0.45rem 0.75rem; font-size: 0.82rem; }
-.subnav button.on { background: #3dd6a5; color: #062117; border-color: transparent; }
+.subnav button.on { background: #3d6fd8; color: #ffffff; border-color: transparent; }
 body.in .shell { padding-bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
 .coin-card { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; margin-top: 0.75rem; }
 .coin-amount { margin: 0.15rem 0; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
@@ -205,7 +205,7 @@ body.in .shell { padding-bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
   font-size: 0.75rem;
 }
 .pill.wait { background: rgba(215, 181, 109, 0.16); color: #f0d48a; }
-.pill.ok { background: rgba(61, 214, 165, 0.16); color: #9cf0d2; }
+.pill.ok { background: rgba(61, 111, 216, 0.22); color: #c5d6ff; }
 .account .ghost, .activity .ghost { justify-self: start; padding: 0.55rem 0.8rem; }
 .chips { display: flex; gap: 0.45rem; }
 .chips button { flex: 1; padding: 0.65rem 0.4rem; }
@@ -242,7 +242,7 @@ body.in .shell { padding-bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
   overflow: auto;
 }
 .grab { width: 2.6rem; height: 0.28rem; border-radius: 99px; background: rgba(255, 255, 255, 0.22); margin: 0.15rem auto 0.8rem; }
-.network { margin: 0; color: #9cf0d2; font-size: 0.9rem; }
+.network { margin: 0; color: #c5d6ff; font-size: 0.9rem; }
 .address-box { display: grid; gap: 0.55rem; padding: 0.85rem; border-radius: 16px; background: #0b141d; }
 .pay-address { margin: 0; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92rem; line-height: 1.45; }
 .link-button { display: block; text-align: center; text-decoration: none; }
