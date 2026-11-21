@@ -40,7 +40,8 @@ _SCALE = Decimal("0.00000001")
 _MAX = Decimal("1000000000000")
 _POSTED = {"finished", "completed", "success"}
 _FAILED = {"failed", "rejected", "expired", "refunded"}
-_HELD_WITHDRAW = {"requested", "pending", "posted"}
+_HELD_WITHDRAW = {"requested", "pending", "posted", "paused"}
+_OPEN_WITHDRAW = {"requested", "pending"}
 
 
 class AssetError(Exception):
@@ -136,13 +137,14 @@ def request_withdrawal(db: Session, user: User, currency: str, amount: Decimal, 
     destination = _address(address)
     if cash > _available(db, user, coin):
         raise AssetError(400, "That is more than this asset has available")
+    status = "paused" if _has_open_withdrawal(db, user) else "requested"
     row = AssetTransfer(
         organization_id=user.organization_id,
         user_id=user.id,
         currency=coin,
         direction="withdraw",
         amount=cash,
-        status="requested",
+        status=status,
         address=destination,
     )
     db.add(row)
@@ -202,6 +204,7 @@ def approve_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, 
         row.status = "posted"
         if not row.note:
             row.note = "Approved"
+    _release_paused_withdrawal(db, row.user_id, row.organization_id, ip, actor.id)
     write_audit(
         db,
         organization_id=row.organization_id,
@@ -222,6 +225,7 @@ def reject_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, n
     owner = db.get(User, row.user_id)
     row.status = "rejected"
     row.note = str(note or "").strip()[:240]
+    _release_paused_withdrawal(db, row.user_id, row.organization_id, ip, actor.id)
     write_audit(
         db,
         organization_id=row.organization_id,
@@ -290,6 +294,7 @@ def settle_asset_payout(db: Session, organization_id, body: dict) -> dict | None
     if state == "pending":
         return {"status": "pending", "id": str(row.id)}
     row.status = state
+    _release_paused_withdrawal(db, row.user_id, row.organization_id, "")
     write_audit(
         db,
         organization_id=organization_id,
@@ -332,6 +337,44 @@ def _available(db: Session, user: User, currency: str) -> Decimal:
         elif row.direction == "contract" and row.status == "hold":
             total -= row.amount
     return total
+
+
+def _withdrawal_rows(db: Session, user_id, organization_id, statuses: set[str]) -> list[AssetTransfer]:
+    rows = db.scalars(
+        select(AssetTransfer).where(
+            AssetTransfer.organization_id == organization_id,
+            AssetTransfer.user_id == user_id,
+            AssetTransfer.direction == "withdraw",
+            AssetTransfer.status.in_(tuple(statuses)),
+        )
+    ).all()
+    return [row for row in rows if getattr(row, "direction", "") == "withdraw" and getattr(row, "status", "") in statuses]
+
+
+def _has_open_withdrawal(db: Session, user: User) -> bool:
+    return bool(_withdrawal_rows(db, user.id, user.organization_id, _OPEN_WITHDRAW))
+
+
+def _release_paused_withdrawal(db: Session, user_id, organization_id, ip: str, actor_user_id=None) -> None:
+    if _withdrawal_rows(db, user_id, organization_id, _OPEN_WITHDRAW):
+        return
+    paused = _withdrawal_rows(db, user_id, organization_id, {"paused"})
+    if not paused:
+        return
+    paused.sort(key=lambda row: (row.created_at is None, row.created_at))
+    nxt = paused[0]
+    nxt.status = "requested"
+    write_audit(
+        db,
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+        actor_type="user" if actor_user_id else "system",
+        action="asset_withdrawal_resumed",
+        entity_type="asset_transfer",
+        entity_id=str(nxt.id),
+        after={"status": "requested", "amount": format(nxt.amount, "f")},
+        ip_address=ip,
+    )
 
 
 def _rows(db: Session, user: User) -> list[AssetTransfer]:

@@ -69,6 +69,7 @@ function coinName(value) {
 }
 
 function statusText(row) {
+  if (row.direction === "withdraw" && row.status === "paused") return "Paused";
   if (row.direction === "withdraw" && (row.status === "requested" || row.status === "pending")) return "Processing internal transactions";
   if (row.direction === "deposit" && row.status === "pending") return "Waiting for payment";
   if (row.status === "requested") return "Waiting for approval";
@@ -81,7 +82,7 @@ function statusText(row) {
 function statusClass(row) {
   const text = statusText(row).toLowerCase();
   if (text === "added" || text === "sent") return "ok";
-  if (text.startsWith("processing") || text.includes("waiting") || text === "sending") return "wait";
+  if (text.startsWith("processing") || text === "paused" || text.includes("waiting") || text === "sending") return "wait";
   return "";
 }
 
@@ -502,8 +503,8 @@ form.addEventListener("submit", async (event) => {
       closeSheet();
       homeBody = { ...(homeBody || {}), payout_address: saved.address };
     } else if (action.kind === "withdraw") {
-      await api("/api/v1/mobile/withdraw", { method: "POST", body: JSON.stringify({ amount, address: String(data.get("address") || "").trim(), currency: "usdttrc20" }) });
-      showNotice("Processing internal transactions.");
+      const body = await api("/api/v1/mobile/withdraw", { method: "POST", body: JSON.stringify({ amount, address: String(data.get("address") || "").trim(), currency: "usdttrc20" }) });
+      showNotice(body.status === "paused" ? "Paused." : "Processing internal transactions.");
       closeSheet();
     } else if (action.kind === "convert" && action.step === "amount") {
       const account = selectedMining();

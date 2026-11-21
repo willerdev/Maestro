@@ -44,6 +44,7 @@ function directionLabel(row: Transfer) {
 }
 
 function statusLabel(status: string) {
+  if (status === "paused") return "Paused";
   if (status === "requested") return "Waiting for approval";
   if (status === "pending") return "Sending";
   if (status === "posted") return "Sent";
