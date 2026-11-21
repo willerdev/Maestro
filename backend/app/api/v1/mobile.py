@@ -15,7 +15,10 @@ from app.api.v1.router import _client_ip
 from app.chain.money import UNIT, format_amount
 from app.models.chain_entities import ChainTxRow, ChainWallet
 from app.models.entities import Account, AccountState, UserPayoutAddress
-from app.services.account_service import AccountError, visible_account_query
+from app.core.security import hash_password, verify_password
+from app.domain.audit import write_audit
+from app.services.account_service import AccountError, create_account, save_mt5_details, visible_account_query
+from app.services.auth_service import password_is_strong
 from app.services.asset_service import AssetError, _address, _available, asset_home, request_deposit, request_withdrawal
 from app.services.contract_service import ContractServiceError, desk, fund_contract, withdraw_contract
 from app.services.conversion_service import ConversionServiceError, convert, pcoin_hold, preview, public_settings
@@ -45,6 +48,21 @@ class AddressIn(BaseModel):
 
 class StakeIn(BaseModel):
     stake_id: UUID
+
+
+class PhoneAccountIn(BaseModel):
+    kind: str
+    name: str = ""
+    login: str = ""
+    password: str = ""
+    server: str = ""
+    broker: str = ""
+    accepted_terms: bool = False
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
 
 
 def _fail(exc: Exception) -> None:
@@ -214,6 +232,62 @@ def convert_pcoin(body: AmountIn, principal: Principal = Depends(get_principal),
         return convert(db, principal.user.organization_id, principal.user.id, format(body.amount, "f"))
     except ConversionServiceError as exc:
         _fail(exc)
+
+
+@router.post("/mobile/accounts")
+def add_phone_account(body: PhoneAccountIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    kind = str(body.kind or "").strip()
+    ip = _client_ip(request)
+    try:
+        if kind == "mt5":
+            account = save_mt5_details(
+                db,
+                principal.user,
+                principal.roles,
+                {"display_name": body.name, "login": body.login, "password": body.password, "server": body.server, "broker": body.broker},
+                ip,
+            )
+        elif kind in {"contract", "project_coin"}:
+            if not body.accepted_terms:
+                raise AccountError(400, "Agree to the terms first")
+            account, _secrets = create_account(
+                db,
+                principal.user,
+                principal.roles,
+                {
+                    "connection_method": "blockchain" if kind == "contract" else "mining",
+                    "display_name": body.name.strip(),
+                    "credentials": {"accepted_terms": True},
+                },
+                ip,
+            )
+        else:
+            raise AccountError(400, "Other account types are added in the desk software")
+    except AccountError as exc:
+        _fail(exc)
+    db.commit()
+    return {"id": str(account.id), "name": account.display_name, "method": account.connection_method, "status": account.status}
+
+
+@router.post("/mobile/password")
+def change_password(body: PasswordChangeIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    user = principal.user
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(400, "The current password is wrong")
+    if not password_is_strong(body.new_password):
+        raise HTTPException(400, "Use at least 12 characters with a letter and a number")
+    user.password_hash = hash_password(body.new_password)
+    write_audit(
+        db,
+        organization_id=user.organization_id,
+        actor_user_id=user.id,
+        action="password_changed",
+        entity_type="user",
+        entity_id=str(user.id),
+        ip_address=_client_ip(request),
+    )
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/mobile/contracts/fund")

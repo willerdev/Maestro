@@ -54,8 +54,11 @@ function signedIn(on) {
   login.hidden = on;
   home.hidden = !on;
   signout.hidden = !on;
+  const opening = on && !document.body.classList.contains("in");
   document.body.classList.toggle("in", on);
-  document.querySelector("#title").textContent = on ? "Wallet" : "Sign in";
+  document.querySelector("#menu").hidden = !on;
+  if (opening) showView("wallet");
+  else if (!on) document.querySelector("#title").textContent = "Sign in";
   const theme = document.querySelector('meta[name="theme-color"]');
   if (theme) theme.setAttribute("content", on ? "#071018" : (document.body.classList.contains("gate-dark") ? "#0e1217" : "#f4f6f8"));
 }
@@ -108,10 +111,32 @@ function miningAccounts() {
   return (homeBody?.accounts || []).filter((account) => account.action === "convert");
 }
 
+function showView(name) {
+  document.querySelectorAll("[data-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.panel !== name;
+  });
+  document.querySelectorAll("#menu button").forEach((button) => {
+    button.classList.toggle("on", button.dataset.view === name);
+  });
+  document.querySelector("#title").textContent = { wallet: "Wallet", accounts: "Accounts", coin: "Project Coin", password: "Password" }[name] || "Wallet";
+}
+
 function accountButton(account) {
   if (account.action === "convert") return `<button class="ghost" type="button" data-action="convert" data-id="${account.id}">Convert to USDT</button>`;
   if (account.action === "contract") return `<button class="ghost" type="button" data-action="fund" data-id="${account.id}">Transfer in</button>`;
+  if (account.method === "local_mt5") return `<p class="meta">MT5 ${escapeHtml(account.number)} · ${escapeHtml(account.status)}</p>`;
   return `<p class="meta">Shown from the broker. Cash moves through the USDT wallet.</p>`;
+}
+
+function accountCard(account) {
+  return `
+    <article class="account">
+      <strong>${escapeHtml(account.name)}</strong>
+      <span class="meta">${money(account.balance)} ${account.currency}</span>
+      <span class="pill">${account.status}</span>
+      ${accountButton(account)}
+    </article>
+  `;
 }
 
 function render(body) {
@@ -125,14 +150,10 @@ function render(body) {
   const payout = document.querySelector("#payout-address");
   payout.textContent = body.payout_address || "Not set";
   payout.classList.toggle("muted", !body.payout_address);
-  document.querySelector("#accounts").innerHTML = body.accounts.map((account) => `
-    <article class="account">
-      <strong>${escapeHtml(account.name)}</strong>
-      <span class="meta">${money(account.balance)} ${account.currency}</span>
-      <span class="pill">${account.status}</span>
-      ${accountButton(account)}
-    </article>
-  `).join("") || `<p class="muted">No accounts on this login.</p>`;
+  const trading = body.accounts.filter((account) => account.action !== "convert");
+  const mining = body.accounts.filter((account) => account.action === "convert");
+  document.querySelector("#accounts").innerHTML = trading.map(accountCard).join("") || `<p class="muted">No contract or trading accounts yet.</p>`;
+  document.querySelector("#coin-accounts").innerHTML = mining.map(accountCard).join("") || `<p class="muted">No Project Coin accounts yet.</p>`;
   document.querySelector("#contracts").innerHTML = body.contracts.map((row) => `
     <article class="account">
       <strong>${row.account}</strong>
@@ -166,13 +187,25 @@ function closeSheet() {
 
 function openSheet(next) {
   action = next;
-  const titles = { deposit: "Deposit USDT", withdraw: "Withdraw USDT", convert: "Convert Project Coin", fund: "Transfer to contract", address: "Your wallet address" };
+  const titles = { deposit: "Deposit USDT", withdraw: "Withdraw USDT", convert: "Convert Project Coin", fund: "Transfer to contract", address: "Your wallet address", "add-contract": "Add contract", "add-mt5": "Add MetaTrader", "add-coin": "Add Project Coin" };
   document.querySelector("#sheet-title").textContent = titles[next.kind];
   document.querySelector("#sheet-help").textContent = next.help || "";
   const addressLabel = document.querySelector("#address-label");
   addressLabel.hidden = next.kind !== "withdraw" && next.kind !== "address";
   document.querySelector("#address").required = next.kind === "withdraw" || next.kind === "address";
-  const amountOnly = next.kind !== "address";
+  const detailsOnly = next.kind === "address" || next.kind === "add-contract" || next.kind === "add-mt5" || next.kind === "add-coin";
+  const extra = document.querySelector("#extra");
+  extra.hidden = true;
+  extra.innerHTML = "";
+  if (next.kind === "add-contract" || next.kind === "add-coin") {
+    extra.hidden = false;
+    extra.innerHTML = `<label>Name<input name="name" maxlength="160" placeholder="Optional name" /></label><label class="check"><input type="checkbox" name="terms" required /><span>${escapeHtml(next.terms || "")}</span></label>`;
+  }
+  if (next.kind === "add-mt5") {
+    extra.hidden = false;
+    extra.innerHTML = `<label>Name<input name="name" maxlength="160" placeholder="Optional name" /></label><label>Broker<input name="broker" placeholder="Broker" /></label><label>Login<input name="login" inputmode="numeric" autocomplete="off" required /></label><label>Password<input name="mt5_password" type="password" autocomplete="new-password" required /></label><label>Server<input name="server" autocomplete="off" required /></label>`;
+  }
+  const amountOnly = !detailsOnly;
   document.querySelector("#amount-label").hidden = !amountOnly;
   document.querySelector("#amount").required = amountOnly;
   const chips = document.querySelector("#chips");
@@ -182,7 +215,7 @@ function openSheet(next) {
   document.querySelector("#account-pick").hidden = true;
   document.querySelector("#available-line").hidden = true;
   document.querySelector("#sheet-submit").hidden = false;
-  document.querySelector("#sheet-submit").textContent = next.kind === "address" ? "Save address" : "Continue";
+  document.querySelector("#sheet-submit").textContent = next.kind === "address" ? "Save address" : String(next.kind).startsWith("add-") ? "Save account" : "Continue";
   form.hidden = false;
   receipt.hidden = true;
   form.reset();
@@ -191,7 +224,8 @@ function openSheet(next) {
   }
   sheet.hidden = false;
   document.body.style.overflow = "hidden";
-  if (next.kind === "address" || next.kind === "withdraw") document.querySelector("#address").focus();
+  if (String(next.kind).startsWith("add-")) extra.querySelector("input")?.focus();
+  else if (next.kind === "address" || next.kind === "withdraw") document.querySelector("#address").focus();
   else if (next.kind !== "convert") document.querySelector("#amount").focus();
 }
 
@@ -397,6 +431,42 @@ document.querySelector("#mfa-form").addEventListener("submit", async (event) => 
   }
 });
 
+document.querySelector("#menu").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  showView(button.dataset.view);
+});
+
+document.querySelector("#password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#password-error");
+  const button = document.querySelector("#password-submit");
+  const data = new FormData(form);
+  error.hidden = true;
+  if (data.get("new_password") !== data.get("confirm_password")) {
+    error.hidden = false;
+    error.textContent = "The new passwords do not match.";
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Saving…";
+  try {
+    await api("/api/v1/mobile/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: data.get("current_password"), new_password: data.get("new_password") }),
+    });
+    form.reset();
+    showNotice("Password changed.");
+  } catch (err) {
+    error.hidden = false;
+    error.textContent = err.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Save password";
+  }
+});
+
 signout.addEventListener("click", async () => {
   generation += 1;
   await api("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
@@ -416,6 +486,9 @@ home.addEventListener("click", (event) => {
     openSheet({ kind, help: "Enter the USDT amount. The next screen shows the TRC20 address to pay." });
   }
   if (kind === "address") openSheet({ kind, help: "This TRC20 address is saved on your login and used for withdrawals." });
+  if (kind === "add-contract") openSheet({ kind, help: "Agree to add a contract account. A private key is not stored.", terms: "I agree. Maestro reads public balances only and does not store a private key." });
+  if (kind === "add-mt5") openSheet({ kind, help: "Save the MetaTrader login, password, and server. The live terminal is checked from the desk software." });
+  if (kind === "add-coin") openSheet({ kind, help: "Agree to add a Project Coin account on this login.", terms: "I agree. Project Coin is mined on this server. It is not Bitcoin." });
   if (kind === "withdraw") openSheet({ kind, help: homeBody?.payout_address ? "This withdrawal uses your saved TRC20 address." : "Enter your TRC20 address. It is saved on your login." });
   if (kind === "convert") openConvert(button.dataset.id || "");
   if (kind === "fund") openSheet({ kind, id: button.dataset.id, help: "Moves USDT from the wallet onto this contract." });
@@ -492,7 +565,8 @@ form.addEventListener("submit", async (event) => {
   error.hidden = true;
   const data = new FormData(form);
   const amount = String(data.get("amount") || "").trim().replace(/,/g, "");
-  if (action?.kind !== "address" && (!amount || Number(amount) <= 0)) {
+  const adding = action?.kind === "add-contract" || action?.kind === "add-mt5" || action?.kind === "add-coin";
+  if (!adding && action?.kind !== "address" && (!amount || Number(amount) <= 0)) {
     error.hidden = false;
     error.textContent = "Enter an amount greater than 0.";
     return;
@@ -500,7 +574,25 @@ form.addEventListener("submit", async (event) => {
   const submit = document.querySelector("#sheet-submit");
   submit.disabled = true;
   try {
-    if (action.kind === "deposit") {
+    if (adding) {
+      const kind = action.kind === "add-contract" ? "contract" : action.kind === "add-coin" ? "project_coin" : "mt5";
+      const saved = await api("/api/v1/mobile/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          kind,
+          name: String(data.get("name") || "").trim(),
+          broker: String(data.get("broker") || "").trim(),
+          login: String(data.get("login") || "").trim(),
+          password: String(data.get("mt5_password") || ""),
+          server: String(data.get("server") || "").trim(),
+          accepted_terms: data.get("terms") === "on",
+        }),
+      });
+      showNotice(`${saved.name} added.`);
+      closeSheet();
+      if (kind === "project_coin") showView("coin");
+      else showView("accounts");
+    } else if (action.kind === "deposit") {
       const body = await api("/api/v1/mobile/deposit", { method: "POST", body: JSON.stringify({ amount }) });
       showReceipt(body);
       showNotice("");

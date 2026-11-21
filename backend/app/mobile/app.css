@@ -127,6 +127,27 @@ button:disabled { opacity: 0.72; }
 .ghost, .text { background: rgba(255, 255, 255, 0.04); color: #e7f0f6; border: 1px solid rgba(143, 180, 201, 0.2); }
 .text { border: 0; background: transparent; padding: 0.35rem 0; color: #9eb4c4; }
 .actions { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 0.5rem; margin-top: 0.95rem; }
+.add-actions { grid-template-columns: 1fr 1fr; margin: 0 0 0.75rem; }
+.add-one { width: 100%; margin: 0.75rem 0; }
+.panel-title { margin: 0; color: inherit; }
+.check { display: flex; gap: 0.6rem; align-items: flex-start; }
+.check input { width: auto; margin-top: 0.2rem; }
+.menu {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.25rem;
+  padding: 0.4rem 0.45rem calc(0.45rem + env(safe-area-inset-bottom));
+  background: rgba(7, 16, 24, 0.96);
+  border-top: 1px solid rgba(143, 180, 201, 0.16);
+}
+.menu button { background: transparent; color: #9eb4c4; border: 0; border-radius: 12px; padding: 0.55rem 0.15rem; font-size: 0.72rem; }
+.menu button.on { background: #3dd6a5; color: #062117; font-weight: 700; }
+body.in .shell { padding-bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
 .coin-card { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; margin-top: 0.75rem; }
 .coin-amount { margin: 0.15rem 0; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
 .coin-worth { margin: 0; color: #d7b56d; font-variant-numeric: tabular-nums; }

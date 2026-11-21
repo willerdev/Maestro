@@ -43,6 +43,7 @@
       </div>
     </section>
     <section id="home" hidden>
+    <div data-panel="wallet">
       <article class="hero">
         <p class="label">Available USDT</p>
         <p id="usdt" class="amount">0.00</p>
@@ -58,6 +59,20 @@
         <p id="payout-address" class="pay-address">Not set</p>
         <button class="ghost" type="button" data-open="address">Set address</button>
       </article>
+      <h2>Activity</h2>
+      <div id="activity" class="stack"></div>
+    </div>
+    <div data-panel="accounts" hidden>
+      <div class="actions add-actions">
+        <button class="primary" type="button" data-open="add-contract">Add contract</button>
+        <button class="ghost" type="button" data-open="add-mt5">Add MetaTrader</button>
+      </div>
+      <p class="muted">Contracts and MetaTrader details can be added here. Other account types are added in the desk software.</p>
+      <div id="accounts" class="stack"></div>
+      <h2>Contract transfers</h2>
+      <div id="contracts" class="stack"></div>
+    </div>
+    <div data-panel="coin" hidden>
       <article class="card coin-card">
         <div>
           <p class="label">Project Coin</p>
@@ -66,12 +81,22 @@
         </div>
         <p id="pcoin-usdt" class="coin-worth"></p>
       </article>
-      <h2>Accounts</h2>
-      <div id="accounts" class="stack"></div>
-      <h2>Contracts</h2>
-      <div id="contracts" class="stack"></div>
-      <h2>Activity</h2>
-      <div id="activity" class="stack"></div>
+      <button class="primary add-one" type="button" data-open="add-coin">Add Project Coin</button>
+      <div id="coin-accounts" class="stack"></div>
+    </div>
+    <div data-panel="password" hidden>
+      <article class="card">
+        <h2 class="panel-title">Change password</h2>
+        <form id="password-form" class="stack">
+          <label>Current password<input name="current_password" type="password" autocomplete="current-password" required /></label>
+          <label>New password<input name="new_password" type="password" autocomplete="new-password" minlength="12" required /></label>
+          <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="12" required /></label>
+          <p class="muted">At least 12 characters, with a letter and a number.</p>
+          <p id="password-error" class="error" hidden></p>
+          <button id="password-submit" class="primary" type="submit">Save password</button>
+        </form>
+      </article>
+    </div>
     </section>
   </main>
   <div id="sheet" class="sheet" hidden>
@@ -84,6 +109,7 @@
         <div id="account-pick" class="pick" hidden></div>
         <div id="available-line" class="available" hidden></div>
         <div id="chips" class="chips" hidden></div>
+        <div id="extra" class="stack" hidden></div>
         <label id="amount-label">Amount<input id="amount" name="amount" inputmode="decimal" placeholder="0.00" required /></label>
         <label id="address-label" hidden>Payout address<input id="address" name="address" autocomplete="off" placeholder="TRC20 address" /></label>
         <p id="sheet-error" class="error" hidden></p>
@@ -105,6 +131,12 @@
       </div>
     </section>
   </div>
+  <nav id="menu" class="menu" hidden>
+    <button type="button" data-view="wallet">Wallet</button>
+    <button type="button" data-view="accounts">Accounts</button>
+    <button type="button" data-view="coin">Project Coin</button>
+    <button type="button" data-view="password">Password</button>
+  </nav>
   <script src="/m/app.js"></script>
 </body>
 </html>

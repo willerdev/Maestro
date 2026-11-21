@@ -396,6 +396,71 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
     return account, secret_bundle
 
 
+def save_mt5_details(db: Session, user: User, roles: list[str], payload: dict, ip: str) -> Account:
+    """Store MetaTrader login details from the phone. The desk still does the live terminal check."""
+    from app.services.expense_service import deposit_ready
+    from app.services.system_config_service import method_is_open
+
+    method = "local_mt5"
+    if not method_is_open(db, user.organization_id, method):
+        raise AccountError(400, "This account type is not available")
+    if not deposit_ready(db, user, roles):
+        raise AccountError(400, "Deposit a minimum of $500 before adding this account. Project Coin can be added now.")
+    login = str(payload.get("login") or "").strip()
+    password = str(payload.get("password") or "")
+    server = str(payload.get("server") or "").strip()
+    broker = str(payload.get("broker") or "").strip() or "MetaTrader"
+    alias = str(payload.get("display_name") or "").strip()[:160]
+    if not login or not password or not server:
+        raise AccountError(400, "Enter the MT5 login, password, and server")
+    if len(login) > 40 or len(server) > 120 or len(broker) > 120 or len(password) > 200:
+        raise AccountError(400, "Those MT5 details are too long")
+    display_name = alias or f"MT5 {login}"
+    existing = db.scalar(
+        select(Account).where(
+            Account.organization_id == user.organization_id,
+            Account.broker == broker,
+            Account.server == server,
+            Account.account_number == login,
+        )
+    )
+    if existing is not None:
+        raise AccountError(409, "That account is already on the running list")
+    if _owned_counts(db, user.id).get(method, 0) >= _method_limit(method):
+        raise AccountError(409, "You can add up to 10 MetaTrader accounts.")
+    account = Account(
+        organization_id=user.organization_id,
+        display_name=display_name,
+        broker=broker,
+        server=server,
+        account_number=login,
+        connection_method=method,
+        currency="USD",
+        leverage=Decimal("100"),
+        trading_day_timezone="UTC",
+        status="pending",
+    )
+    db.add(account)
+    db.flush()
+    db.add(AccountGrant(account_id=account.id, user_id=user.id))
+    db.add(AccountState(account_id=account.id))
+    db.add(AccountConnection(account_id=account.id, method=method, status="pending"))
+    ensure_account_profile(db, account)
+    nonce, ciphertext = encrypt_json({"login": login, "password": password, "server": server, "broker": broker})
+    db.add(AccountCredential(account_id=account.id, nonce=nonce, ciphertext=ciphertext))
+    write_audit(
+        db,
+        organization_id=user.organization_id,
+        actor_user_id=user.id,
+        action="account_created",
+        entity_type="account",
+        entity_id=str(account.id),
+        after={"display_name": account.display_name, "method": method, "account_number": login},
+        ip_address=ip,
+    )
+    return account
+
+
 def update_account(db: Session, user: User, account: Account, payload: dict, ip: str) -> Account:
     before = {"display_name": account.display_name, "broker": account.broker, "server": account.server}
     for field in ("display_name", "broker", "server", "trading_day_timezone"):
