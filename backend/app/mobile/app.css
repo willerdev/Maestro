@@ -26,7 +26,11 @@ h2 { font-size: 0.95rem; margin: 1.15rem 0 0.55rem; color: #c5d5e2; }
     linear-gradient(160deg, rgba(61, 214, 165, 0.16), transparent 42%),
     linear-gradient(180deg, #143044, #101c28);
 }
-.login-card h2 { margin-bottom: 0.8rem; }
+.password-row { display: flex; gap: 0.45rem; align-items: center; }
+.password-row input { flex: 1; }
+.tiny { padding: 0.7rem 0.75rem; white-space: nowrap; }
+.payout-card { display: grid; gap: 0.55rem; margin-top: 0.75rem; }
+.payout-card .ghost { justify-self: start; }
 .eyebrow { margin: 0 0 0.2rem; color: #7d93a6; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .stack { display: grid; gap: 0.75rem; }
 .label { margin: 0; color: #8ea3b3; font-size: 0.8rem; }

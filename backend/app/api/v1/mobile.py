@@ -14,9 +14,9 @@ from app.api.deps import Principal, get_db, get_principal
 from app.api.v1.router import _client_ip
 from app.chain.money import UNIT, format_amount
 from app.models.chain_entities import ChainTxRow, ChainWallet
-from app.models.entities import Account, AccountState
+from app.models.entities import Account, AccountState, UserPayoutAddress
 from app.services.account_service import AccountError, visible_account_query
-from app.services.asset_service import AssetError, _available, asset_home, request_deposit, request_withdrawal
+from app.services.asset_service import AssetError, _address, _available, asset_home, request_deposit, request_withdrawal
 from app.services.contract_service import ContractServiceError, desk, fund_contract, withdraw_contract
 from app.services.conversion_service import ConversionServiceError, convert, pcoin_hold, preview, public_settings
 from app.services.mining_plan_service import bonus_available
@@ -39,6 +39,10 @@ class FundIn(BaseModel):
     amount: Decimal
 
 
+class AddressIn(BaseModel):
+    address: str
+
+
 class StakeIn(BaseModel):
     stake_id: UUID
 
@@ -47,6 +51,28 @@ def _fail(exc: Exception) -> None:
     status = getattr(exc, "status", 400)
     detail = getattr(exc, "detail", None) or str(exc)
     raise HTTPException(status, detail) from exc
+
+
+def _ensure_payout_table(db: Session) -> None:
+    UserPayoutAddress.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+
+def _saved_address(db: Session, user) -> str:
+    _ensure_payout_table(db)
+    row = db.get(UserPayoutAddress, user.id)
+    return "" if row is None else row.address
+
+
+def _save_address(db: Session, user, address: str) -> str:
+    text = _address(address)
+    _ensure_payout_table(db)
+    row = db.get(UserPayoutAddress, user.id)
+    if row is None:
+        db.add(UserPayoutAddress(user_id=user.id, organization_id=user.organization_id, address=text))
+    else:
+        row.address = text
+        row.organization_id = user.organization_id
+    return text
 
 
 def _pcoin_atomic(db: Session, user) -> int:
@@ -134,6 +160,7 @@ def home(principal: Principal = Depends(get_principal), db: Session = Depends(ge
         "fee_bps": int(rules["fee_bps"]),
         "min_pcoin": rules["min_pcoin"],
         "payments_ready": wallet["configured"],
+        "payout_address": _saved_address(db, user),
         "accounts": cards,
         "contracts": contracts["positions"],
         "transfers": wallet["transfers"],
@@ -150,10 +177,23 @@ def deposit(body: AmountIn, request: Request, principal: Principal = Depends(get
     return payload
 
 
+@router.post("/mobile/payout-address")
+def save_payout_address(body: AddressIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    try:
+        address = _save_address(db, principal.user, body.address)
+    except AssetError as exc:
+        _fail(exc)
+    db.commit()
+    return {"address": address}
+
+
 @router.post("/mobile/withdraw")
 def withdraw(body: WithdrawIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    address = str(body.address or "").strip() or _saved_address(db, principal.user)
     try:
-        payload = request_withdrawal(db, principal.user, body.currency or "usdttrc20", body.amount, body.address, _client_ip(request))
+        if address:
+            address = _save_address(db, principal.user, address)
+        payload = request_withdrawal(db, principal.user, body.currency or "usdttrc20", body.amount, address, _client_ip(request))
     except AssetError as exc:
         _fail(exc)
     db.commit()

@@ -69,6 +69,7 @@ function coinName(value) {
 }
 
 function statusText(row) {
+  if (row.direction === "withdraw" && (row.status === "requested" || row.status === "pending")) return "Processing internal transactions";
   if (row.direction === "deposit" && row.status === "pending") return "Waiting for payment";
   if (row.status === "requested") return "Waiting for approval";
   if (row.status === "pending") return "Sending";
@@ -80,7 +81,7 @@ function statusText(row) {
 function statusClass(row) {
   const text = statusText(row).toLowerCase();
   if (text === "added" || text === "sent") return "ok";
-  if (text.includes("waiting") || text === "sending") return "wait";
+  if (text.startsWith("processing") || text.includes("waiting") || text === "sending") return "wait";
   return "";
 }
 
@@ -114,6 +115,9 @@ function render(body) {
   document.querySelector("#pcoin").textContent = `${body.pcoin} PCoin`;
   document.querySelector("#pcoin-usdt").textContent = `≈ ${money(body.pcoin_usdt)} USDT`;
   document.querySelector("#rate").textContent = body.rate || "";
+  const payout = document.querySelector("#payout-address");
+  payout.textContent = body.payout_address || "Not set";
+  payout.classList.toggle("muted", !body.payout_address);
   document.querySelector("#accounts").innerHTML = body.accounts.map((account) => `
     <article class="account">
       <strong>${escapeHtml(account.name)}</strong>
@@ -155,14 +159,15 @@ function closeSheet() {
 
 function openSheet(next) {
   action = next;
-  const titles = { deposit: "Deposit USDT", withdraw: "Withdraw USDT", convert: "Convert Project Coin", fund: "Transfer to contract" };
+  const titles = { deposit: "Deposit USDT", withdraw: "Withdraw USDT", convert: "Convert Project Coin", fund: "Transfer to contract", address: "Your wallet address" };
   document.querySelector("#sheet-title").textContent = titles[next.kind];
   document.querySelector("#sheet-help").textContent = next.help || "";
   const addressLabel = document.querySelector("#address-label");
-  addressLabel.hidden = next.kind !== "withdraw";
-  document.querySelector("#address").required = next.kind === "withdraw";
-  document.querySelector("#amount-label").hidden = false;
-  document.querySelector("#amount").required = true;
+  addressLabel.hidden = next.kind !== "withdraw" && next.kind !== "address";
+  document.querySelector("#address").required = next.kind === "withdraw" || next.kind === "address";
+  const amountOnly = next.kind !== "address";
+  document.querySelector("#amount-label").hidden = !amountOnly;
+  document.querySelector("#amount").required = amountOnly;
   const chips = document.querySelector("#chips");
   chips.hidden = next.kind !== "deposit";
   chips.innerHTML = next.kind === "deposit" ? ["50", "100", "500", "1000"].map((value) => `<button class="ghost" type="button" data-chip="${value}">${value}</button>`).join("") : "";
@@ -170,13 +175,17 @@ function openSheet(next) {
   document.querySelector("#account-pick").hidden = true;
   document.querySelector("#available-line").hidden = true;
   document.querySelector("#sheet-submit").hidden = false;
-  document.querySelector("#sheet-submit").textContent = "Continue";
+  document.querySelector("#sheet-submit").textContent = next.kind === "address" ? "Save address" : "Continue";
   form.hidden = false;
   receipt.hidden = true;
   form.reset();
+  if (next.kind === "withdraw" || next.kind === "address") {
+    document.querySelector("#address").value = homeBody?.payout_address || "";
+  }
   sheet.hidden = false;
   document.body.style.overflow = "hidden";
-  if (next.kind !== "convert") document.querySelector("#amount").focus();
+  if (next.kind === "address" || next.kind === "withdraw") document.querySelector("#address").focus();
+  else if (next.kind !== "convert") document.querySelector("#amount").focus();
 }
 
 function selectedMining() {
@@ -289,8 +298,11 @@ function showReceipt(row) {
 }
 
 const loginForm = document.querySelector("#login-form");
-const loginButton = loginForm.querySelector("button");
+const loginButton = document.querySelector("#login-submit");
+const loginError = document.querySelector("#login-error");
 let signingIn = false;
+const rememberedEmail = localStorage.getItem("maestro-phone-email");
+if (rememberedEmail) document.querySelector("#login-email").value = rememberedEmail;
 
 function press(button) {
   button.addEventListener("pointerdown", () => button.classList.add("pressed"));
@@ -299,9 +311,22 @@ function press(button) {
 }
 press(loginButton);
 
+document.querySelector("#show-password").addEventListener("click", () => {
+  const input = document.querySelector("#login-password");
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  document.querySelector("#show-password").textContent = show ? "Hide" : "Show";
+});
+
+function showLoginError(text) {
+  loginError.hidden = !text;
+  loginError.textContent = text || "";
+  showNotice(text);
+}
+
 loginForm.addEventListener("invalid", (event) => {
   event.preventDefault();
-  showNotice(event.target.validationMessage || "Enter your email and password.");
+  showLoginError(event.target.validationMessage || "Enter your email and password.");
 }, true);
 
 loginForm.addEventListener("submit", async (event) => {
@@ -309,29 +334,32 @@ loginForm.addEventListener("submit", async (event) => {
   if (signingIn) return;
   signingIn = true;
   const data = new FormData(loginForm);
+  const email = String(data.get("email") || "").trim();
   loginButton.disabled = true;
   loginButton.textContent = "Signing in…";
+  showLoginError("");
   showNotice("Signing in…");
   try {
     const body = await api("/api/v1/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email: String(data.get("email") || "").trim(), password: data.get("password") }),
+      body: JSON.stringify({ email, password: data.get("password") }),
     });
+    localStorage.setItem("maestro-phone-email", email);
     if (body.mfa_required) {
       mfaToken = body.mfa_token;
       document.querySelector("#mfa-form").hidden = false;
-      showNotice("Enter the authentication code.");
+      showNotice("Enter the authentication code from your authenticator.");
       return;
     }
     signedIn(true);
     document.querySelector("#who").hidden = false;
-    document.querySelector("#who").textContent = (body.user && (body.user.full_name || body.user.email)) || "";
-    showNotice("Loading your wallet…");
+    document.querySelector("#who").textContent = (body.user && (body.user.full_name || body.user.email)) || email;
+    showNotice("Opening your wallet…");
     await load();
     showNotice("");
   } catch (error) {
-    if (!home.hidden) showNotice(`${error.message} Pull to refresh, or sign in again.`);
-    else showNotice(error.message);
+    if (!home.hidden) showNotice(error.message);
+    else showLoginError(error.message);
   } finally {
     signingIn = false;
     loginButton.disabled = false;
@@ -379,7 +407,8 @@ home.addEventListener("click", (event) => {
     }
     openSheet({ kind, help: "Enter the USDT amount. The next screen shows the TRC20 address to pay." });
   }
-  if (kind === "withdraw") openSheet({ kind, help: "The request waits for approval. The amount stays held until it is sent or rejected." });
+  if (kind === "address") openSheet({ kind, help: "This TRC20 address is saved on your login and used for withdrawals." });
+  if (kind === "withdraw") openSheet({ kind, help: homeBody?.payout_address ? "This withdrawal uses your saved TRC20 address." : "Enter your TRC20 address. It is saved on your login." });
   if (kind === "convert") openConvert(button.dataset.id || "");
   if (kind === "fund") openSheet({ kind, id: button.dataset.id, help: "Moves USDT from the wallet onto this contract." });
   if (kind === "release") {
@@ -455,7 +484,7 @@ form.addEventListener("submit", async (event) => {
   error.hidden = true;
   const data = new FormData(form);
   const amount = String(data.get("amount") || "").trim().replace(/,/g, "");
-  if (!amount || Number(amount) <= 0) {
+  if (action?.kind !== "address" && (!amount || Number(amount) <= 0)) {
     error.hidden = false;
     error.textContent = "Enter an amount greater than 0.";
     return;
@@ -467,9 +496,14 @@ form.addEventListener("submit", async (event) => {
       const body = await api("/api/v1/mobile/deposit", { method: "POST", body: JSON.stringify({ amount }) });
       showReceipt(body);
       showNotice("");
+    } else if (action.kind === "address") {
+      const saved = await api("/api/v1/mobile/payout-address", { method: "POST", body: JSON.stringify({ address: String(data.get("address") || "").trim() }) });
+      showNotice("Wallet address saved.");
+      closeSheet();
+      homeBody = { ...(homeBody || {}), payout_address: saved.address };
     } else if (action.kind === "withdraw") {
-      await api("/api/v1/mobile/withdraw", { method: "POST", body: JSON.stringify({ amount, address: data.get("address"), currency: "usdttrc20" }) });
-      showNotice("Withdrawal requested. It waits for approval.");
+      await api("/api/v1/mobile/withdraw", { method: "POST", body: JSON.stringify({ amount, address: String(data.get("address") || "").trim(), currency: "usdttrc20" }) });
+      showNotice("Processing internal transactions.");
       closeSheet();
     } else if (action.kind === "convert" && action.step === "amount") {
       const account = selectedMining();

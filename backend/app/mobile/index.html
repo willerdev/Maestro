@@ -19,12 +19,19 @@
     </header>
     <p id="notice" class="notice" hidden></p>
     <section id="login" class="card login-card">
-      <p class="eyebrow">Welcome back</p>
+      <p class="eyebrow">Maestro</p>
       <h2>Sign in</h2>
+      <p class="muted">Use the email and password already on your account.</p>
       <form id="login-form" class="stack">
-        <label>Email<input name="email" type="email" autocomplete="username" required /></label>
-        <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
-        <button class="primary" type="submit">Sign in</button>
+        <label>Email<input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required /></label>
+        <label>Password
+          <span class="password-row">
+            <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+            <button id="show-password" class="ghost tiny" type="button">Show</button>
+          </span>
+        </label>
+        <p id="login-error" class="error" hidden></p>
+        <button id="login-submit" class="primary" type="submit">Sign in</button>
       </form>
       <form id="mfa-form" class="stack" hidden>
         <label>Authentication code<input name="code" inputmode="numeric" autocomplete="one-time-code" required /></label>
@@ -41,6 +48,11 @@
           <button class="ghost" type="button" data-open="withdraw">Withdraw</button>
           <button class="ghost" type="button" data-open="convert">Convert</button>
         </div>
+      </article>
+      <article class="card payout-card">
+        <p class="label">Your USDT address</p>
+        <p id="payout-address" class="pay-address">Not set</p>
+        <button class="ghost" type="button" data-open="address">Set address</button>
       </article>
       <article class="card coin-card">
         <div>
