@@ -100,7 +100,19 @@ function directionText(row) {
   if (row.direction === "withdraw") return "Withdrawal";
   if (row.direction === "contract") return "Contract";
   if (row.direction === "expense") return "Expense";
+  if (row.direction === "mining_upgrade") return "Mining upgrade";
   return "Deposit";
+}
+
+function incomingTransfer(row) {
+  return !["withdraw", "expense", "contract", "mining_upgrade"].includes(row.direction);
+}
+
+function whenText(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16).replace("T", " ");
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function escapeHtml(value) {
@@ -249,13 +261,21 @@ function render(body) {
     </article>
   `).join("") || `<p class="muted">No contract transfers.</p>`;
   const transfers = body.transfers || [];
-  document.querySelector("#activity").innerHTML = transfers.map((row) => `
-    <article class="activity">
-      <strong>${directionText(row)} · ${money(row.amount)} ${coinName(row.currency)}</strong>
-      <span class="pill ${statusClass(row)}">${statusText(row)}</span>
-      ${row.direction === "deposit" && row.status === "pending" ? `<button class="ghost" type="button" data-action="pay" data-id="${row.id}">Show address</button>` : ""}
-    </article>
-  `).join("") || `<p class="muted">Deposits and withdrawals show up here.</p>`;
+  document.querySelector("#activity").innerHTML = transfers.map((row) => {
+    const inbound = incomingTransfer(row);
+    const side = inbound ? "in" : "out";
+    const when = whenText(row.created_at);
+    return `
+      <article class="feed-row">
+        <div class="mark ${side}" aria-hidden="true">${inbound ? "↓" : "↑"}</div>
+        <div class="feed-main">
+          <p class="feed-title">${escapeHtml(directionText(row))}</p>
+          <p class="meta">${escapeHtml([when, statusText(row)].filter(Boolean).join(" · "))}</p>
+        </div>
+        <p class="sum ${side}">${inbound ? "+" : "−"}${money(row.amount)}<span>${coinName(row.currency)}</span></p>
+        ${row.direction === "deposit" && row.status === "pending" ? `<button class="ghost" type="button" data-action="pay" data-id="${row.id}">Show address</button>` : ""}
+      </article>`;
+  }).join("") || `<p class="muted">Deposits and withdrawals show up here.</p>`;
 }
 
 async function load() {
