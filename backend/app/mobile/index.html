@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#071018" />
+  <meta name="theme-color" content="#f4f6f8" />
   <title>Maestro</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&amp;display=swap" />
   <link rel="stylesheet" href="/m/app.css" />
 </head>
 <body>
@@ -18,25 +19,28 @@
       <button id="signout" class="text" type="button" hidden>Sign out</button>
     </header>
     <p id="notice" class="notice" hidden></p>
-    <section id="login" class="card login-card">
-      <p class="eyebrow">Maestro</p>
-      <h2>Sign in</h2>
-      <p class="muted">Use the email and password already on your account.</p>
-      <form id="login-form" class="stack">
-        <label>Email<input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" required /></label>
-        <label>Password
-          <span class="password-row">
-            <input id="login-password" name="password" type="password" autocomplete="current-password" required />
-            <button id="show-password" class="ghost tiny" type="button">Show</button>
-          </span>
-        </label>
-        <p id="login-error" class="error" hidden></p>
-        <button id="login-submit" class="primary" type="submit">Sign in</button>
-      </form>
-      <form id="mfa-form" class="stack" hidden>
-        <label>Authentication code<input name="code" inputmode="numeric" autocomplete="one-time-code" required /></label>
-        <button class="primary" type="submit">Confirm</button>
-      </form>
+    <section id="login" class="gate">
+      <div class="gate-card">
+        <div class="gate-top">
+          <div class="gate-brand">MAESTRO</div>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Light or dark" title="Light or dark">
+            <svg class="when-light" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4l1.4-1.4M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/></svg>
+            <svg class="when-dark" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M16 14.5A6.5 6.5 0 0 1 9.5 8 6.5 6.5 0 1 0 16 14.5z"/></svg>
+          </button>
+        </div>
+        <h2 class="gate-title">Sign in</h2>
+        <p id="login-error" class="gate-error" hidden></p>
+        <form id="login-form" class="stack">
+          <input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="Email" required />
+          <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Password" required />
+          <button id="login-submit" class="enter" type="submit">Enter desk</button>
+        </form>
+        <form id="mfa-form" class="stack" hidden>
+          <p class="gate-note">Password accepted. Enter the Google Authenticator code.</p>
+          <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Google Authenticator code" required />
+          <button class="enter" type="submit">Confirm code</button>
+        </form>
+      </div>
     </section>
     <section id="home" hidden>
       <article class="hero">

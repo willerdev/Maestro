@@ -54,8 +54,14 @@ function signedIn(on) {
   login.hidden = on;
   home.hidden = !on;
   signout.hidden = !on;
+  document.body.classList.toggle("in", on);
   document.querySelector("#title").textContent = on ? "Wallet" : "Sign in";
+  const theme = document.querySelector('meta[name="theme-color"]');
+  if (theme) theme.setAttribute("content", on ? "#071018" : (document.body.classList.contains("gate-dark") ? "#0e1217" : "#f4f6f8"));
 }
+
+const savedTheme = localStorage.getItem("maestro-phone-theme") === "dark" ? "dark" : "light";
+document.body.classList.toggle("gate-dark", savedTheme === "dark");
 
 function money(value) {
   const number = Number(value);
@@ -312,11 +318,12 @@ function press(button) {
 }
 press(loginButton);
 
-document.querySelector("#show-password").addEventListener("click", () => {
-  const input = document.querySelector("#login-password");
-  const show = input.type === "password";
-  input.type = show ? "text" : "password";
-  document.querySelector("#show-password").textContent = show ? "Hide" : "Show";
+document.querySelector("#theme-toggle").addEventListener("click", () => {
+  const dark = !document.body.classList.contains("gate-dark");
+  document.body.classList.toggle("gate-dark", dark);
+  localStorage.setItem("maestro-phone-theme", dark ? "dark" : "light");
+  const theme = document.querySelector('meta[name="theme-color"]');
+  if (theme && !document.body.classList.contains("in")) theme.setAttribute("content", dark ? "#0e1217" : "#f4f6f8");
 });
 
 function showLoginError(text) {
@@ -364,7 +371,7 @@ loginForm.addEventListener("submit", async (event) => {
   } finally {
     signingIn = false;
     loginButton.disabled = false;
-    loginButton.textContent = "Sign in";
+    loginButton.textContent = "Enter desk";
   }
 });
 
