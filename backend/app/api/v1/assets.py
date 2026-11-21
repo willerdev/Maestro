@@ -38,7 +38,6 @@ def _fail(exc: AssetError) -> None:
 
 @router.get("/assets")
 def get_assets(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
-    _allow(principal)
     return asset_home(db, principal.user)
 
 

@@ -26,6 +26,12 @@ def ensure_credit_table(db: Session) -> None:
 
 
 def sync_pcoin_credits(db: Session, organization_id, actor_user_id) -> None:
+    """Record credits that still need an approval row.
+
+    The organization is already seeded, so a wallet view only looks at this
+    person's own chain transfers and mining rewards. Scanning every transfer
+    in the organization makes the wallet request hang.
+    """
     ensure_credit_table(db)
     seeded = db.scalar(
         select(PcoinCreditApproval.id).where(
@@ -34,46 +40,79 @@ def sync_pcoin_credits(db: Session, organization_id, actor_user_id) -> None:
             PcoinCreditApproval.source_key == "seed",
         )
     )
-    known = {
-        (row.source, row.source_key)
-        for row in db.scalars(select(PcoinCreditApproval).where(PcoinCreditApproval.organization_id == organization_id)).all()
-    }
-    status = "approved" if seeded is None else "pending"
-    wallets = {
-        row.address: row.user_id
-        for row in db.scalars(select(ChainWallet).where(ChainWallet.organization_id == organization_id)).all()
-    }
-    rewards = db.scalars(
-        select(ChainTxRow).where(
-            ChainTxRow.organization_id == organization_id,
-            ChainTxRow.kind.in_(("reward", "transfer")),
-            ChainTxRow.block_height.is_not(None),
-            ChainTxRow.amount > 0,
-        )
-    ).all()
-    for row in rewards:
-        user_id = wallets.get(row.recipient)
-        if user_id is None or ("chain", str(row.id)) in known:
-            continue
+    if seeded is None:
+        _sync_org_credits(db, organization_id, "approved")
         db.add(
             PcoinCreditApproval(
                 organization_id=organization_id,
-                user_id=user_id,
-                source="chain",
-                source_key=str(row.id),
-                amount_atomic=int(row.amount),
-                status=status,
+                user_id=actor_user_id,
+                source="marker",
+                source_key="seed",
+                amount_atomic=0,
+                status="approved",
             )
         )
-        known.add(("chain", str(row.id)))
+        db.flush()
+        return
+    _sync_user_credits(db, organization_id, actor_user_id, "pending")
+    db.flush()
+
+
+def _known_credit_keys(db: Session, organization_id, user_id) -> set[tuple[str, str]]:
+    rows = db.execute(
+        select(PcoinCreditApproval.source, PcoinCreditApproval.source_key).where(
+            PcoinCreditApproval.organization_id == organization_id,
+            PcoinCreditApproval.user_id == user_id,
+        )
+    ).all()
+    return {(row.source, row.source_key) for row in rows}
+
+
+def _sync_user_credits(db: Session, organization_id, user_id, status: str) -> None:
+    known = _known_credit_keys(db, organization_id, user_id)
+    addresses = list(
+        db.scalars(
+            select(ChainWallet.address).where(
+                ChainWallet.organization_id == organization_id,
+                ChainWallet.user_id == user_id,
+            )
+        ).all()
+    )
+    if addresses:
+        rewards = db.scalars(
+            select(ChainTxRow).where(
+                ChainTxRow.organization_id == organization_id,
+                ChainTxRow.recipient.in_(addresses),
+                ChainTxRow.kind.in_(("reward", "transfer")),
+                ChainTxRow.block_height.is_not(None),
+                ChainTxRow.amount > 0,
+            )
+        ).all()
+        for row in rewards:
+            key = ("chain", str(row.id))
+            if key in known:
+                continue
+            db.add(
+                PcoinCreditApproval(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    source="chain",
+                    source_key=str(row.id),
+                    amount_atomic=int(row.amount),
+                    status=status,
+                )
+            )
+            known.add(key)
     premiums = db.scalars(
         select(MiningRewardLedger).where(
             MiningRewardLedger.organization_id == organization_id,
+            MiningRewardLedger.user_id == user_id,
             MiningRewardLedger.amount_atomic > 0,
         )
     ).all()
     for row in premiums:
-        if ("premium", str(row.id)) in known:
+        key = ("premium", str(row.id))
+        if key in known:
             continue
         db.add(
             PcoinCreditApproval(
@@ -85,19 +124,67 @@ def sync_pcoin_credits(db: Session, organization_id, actor_user_id) -> None:
                 status=status,
             )
         )
-        known.add(("premium", str(row.id)))
-    if seeded is None:
+        known.add(key)
+
+
+def _sync_org_credits(db: Session, organization_id, status: str) -> None:
+    wallets = {
+        row.address: row.user_id
+        for row in db.scalars(select(ChainWallet).where(ChainWallet.organization_id == organization_id)).all()
+    }
+    known = {
+        (row.source, row.source_key)
+        for row in db.execute(
+            select(PcoinCreditApproval.source, PcoinCreditApproval.source_key).where(
+                PcoinCreditApproval.organization_id == organization_id
+            )
+        ).all()
+    }
+    rewards = db.scalars(
+        select(ChainTxRow).where(
+            ChainTxRow.organization_id == organization_id,
+            ChainTxRow.kind.in_(("reward", "transfer")),
+            ChainTxRow.block_height.is_not(None),
+            ChainTxRow.amount > 0,
+        )
+    ).yield_per(500)
+    for row in rewards:
+        user_id = wallets.get(row.recipient)
+        key = ("chain", str(row.id))
+        if user_id is None or key in known:
+            continue
         db.add(
             PcoinCreditApproval(
                 organization_id=organization_id,
-                user_id=actor_user_id,
-                source="marker",
-                source_key="seed",
-                amount_atomic=0,
-                status="approved",
+                user_id=user_id,
+                source="chain",
+                source_key=str(row.id),
+                amount_atomic=int(row.amount),
+                status=status,
             )
         )
-    db.flush()
+        known.add(key)
+    premiums = db.scalars(
+        select(MiningRewardLedger).where(
+            MiningRewardLedger.organization_id == organization_id,
+            MiningRewardLedger.amount_atomic > 0,
+        )
+    ).yield_per(500)
+    for row in premiums:
+        key = ("premium", str(row.id))
+        if key in known:
+            continue
+        db.add(
+            PcoinCreditApproval(
+                organization_id=organization_id,
+                user_id=row.user_id,
+                source="premium",
+                source_key=str(row.id),
+                amount_atomic=int(row.amount_atomic),
+                status=status,
+            )
+        )
+        known.add(key)
 
 
 def held_pcoin_atomic(db: Session, organization_id, user_id) -> int:
