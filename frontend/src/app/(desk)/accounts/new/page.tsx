@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { AccountSections, accountBody, type ConnectionMethod, type Probe } from "@/components/AccountSections";
 import { PageTitle } from "@/components/Shell";
-import { apiJson } from "@/lib/api";
+import { apiJson, isSystemAdmin, type User } from "@/lib/api";
 
 type Created = {
   id: string;
@@ -20,17 +20,25 @@ export default function NewAccountPage() {
   const [created, setCreated] = useState<Created | null>(null);
   const [counts, setCounts] = useState<Partial<Record<ConnectionMethod, number>>>({});
   const [enabled, setEnabled] = useState<Partial<Record<ConnectionMethod, boolean>> | undefined>();
+  const [optionsUsed, setOptionsUsed] = useState<string[]>([]);
+  const [allowWebhook, setAllowWebhook] = useState(false);
+  const [depositReady, setDepositReady] = useState(true);
 
   useEffect(() => {
-    apiJson<{ counts: Partial<Record<ConnectionMethod, number>>; enabled: Partial<Record<ConnectionMethod, boolean>> }>("/api/v1/system")
+    apiJson<User>("/api/v1/auth/me")
+      .then((me) => setAllowWebhook(isSystemAdmin(me.roles)))
+      .catch(() => setAllowWebhook(false));
+    apiJson<{ counts: Partial<Record<ConnectionMethod, number>>; enabled: Partial<Record<ConnectionMethod, boolean>>; options_used?: string[]; deposit_ready?: boolean }>("/api/v1/system")
       .then((info) => {
         setCounts(info.counts || {});
         setEnabled(info.enabled || {});
+        setOptionsUsed(info.options_used || []);
+        setDepositReady(info.deposit_ready !== false);
       })
       .catch((err: Error) => setError(err.message));
   }, []);
 
-  const methodLimit = method === "local_mt5" || method === "passprop" ? 10 : 1;
+  const methodLimit = method === "mining" ? 20 : method === "local_mt5" || method === "passprop" ? 10 : method === "pocketoption" ? 5 : 1;
   const methodFull = (counts[method] || 0) >= methodLimit;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -58,8 +66,8 @@ export default function NewAccountPage() {
   }
 
   return (
-    <div className="max-w-3xl">
-      <PageTitle title="Add account" detail="Give it an alias you will remember if you add more than one. One account of each type; MetaTrader and Pass Props allow up to 10. Number, broker, and size are read after the live check succeeds." />
+    <div className="add-account max-w-3xl min-w-0">
+      <PageTitle title="Add account" detail="Give it an alias you will remember if you add more than one. Project Coin allows up to 20. MetaTrader and Pass Props allow up to 10. Options Trading allows up to 5. Other types allow one." />
       {error ? <p className="text-loss mb-3">{error}</p> : null}
       {methodFull ? <p className="mb-3">This type is full. Delete one from <Link className="text-accent" href="/accounts">Accounts</Link>, or choose another type.</p> : null}
       {created?.webhook ? (
@@ -77,10 +85,10 @@ export default function NewAccountPage() {
         </div>
       ) : (
         <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-          <AccountSections method={method} onMethod={setMethod} allowWebhook showRevenue gateTerms counts={counts} enabled={enabled} onProbe={setProbe} />
+          <AccountSections method={method} onMethod={setMethod} allowWebhook={allowWebhook} showRevenue gateTerms counts={counts} enabled={enabled} optionsUsed={optionsUsed} depositReady={depositReady} onProbe={setProbe} />
           {error ? <p className="text-loss text-sm">{error}</p> : null}
           <button className="primary" type="submit" disabled={methodFull || (method !== "webhook" && method !== "blockchain" && method !== "mining" && !probe?.ok)}>
-            {method === "blockchain" || method === "mining" ? "Agree and continue" : method === "passprop" ? "Save Pass Props account" : "Save account"}
+            {method === "blockchain" || method === "mining" ? "Agree and continue" : method === "passprop" ? "Agree and pay $100" : "Save account"}
           </button>
         </form>
       )}

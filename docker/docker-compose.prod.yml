@@ -1,0 +1,120 @@
+name: maestro
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tradeguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: tradeguard
+    volumes:
+      - maestro_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradeguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - maestro
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - maestro_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - maestro
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    restart: unless-stopped
+    env_file:
+      - ../.env.production
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://tradeguard:${POSTGRES_PASSWORD}@postgres:5432/tradeguard
+      REDIS_URL: redis://redis:6379/0
+      PGCLIENTENCODING: UTF8
+      PYTHONPATH: /srv/backend:/srv/risk-engine:/srv/shared/python
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks:
+      - maestro
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    restart: unless-stopped
+    command: ["celery", "-A", "celery_app.celery", "worker", "--beat", "--loglevel=INFO"]
+    working_dir: /srv/workers
+    env_file:
+      - ../.env.production
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://tradeguard:${POSTGRES_PASSWORD}@postgres:5432/tradeguard
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /srv/backend:/srv/risk-engine:/srv/shared/python:/srv/workers
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - maestro
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      INTERNAL_API_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - maestro
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${MAESTRO_PORT:-8080}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    networks:
+      - maestro
+
+volumes:
+  maestro_pg:
+  maestro_redis:
+
+networks:
+  maestro:

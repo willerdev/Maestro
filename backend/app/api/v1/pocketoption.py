@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_principal
 from app.core.database import get_db
+from app.connectors.options_platforms import public_platforms
 from app.services.account_service import AccountError, get_visible_account, set_pocket_mode
 from app.services.pocket_browser import PocketLoginError, close_login, login_status, open_login
 
@@ -20,6 +21,13 @@ class PocketModeIn(BaseModel):
 
 class PocketLoginIn(BaseModel):
     mode: str = "real"
+    platform: str = "pocketoption"
+
+
+@router.get("/connections/options/platforms")
+def list_options_platforms(principal: Principal = Depends(get_principal)):
+    principal.require("accounts.connect")
+    return {"platforms": public_platforms()}
 
 
 @router.post("/connections/pocketoption/login")
@@ -29,7 +37,7 @@ def start_pocket_login(payload: PocketLoginIn, principal: Principal = Depends(ge
     if mode not in {"demo", "real"}:
         raise HTTPException(400, "Choose Demo or Real")
     try:
-        session = open_login(str(principal.user.id), mode)
+        session = open_login(str(principal.user.id), mode, payload.platform)
     except PocketLoginError as exc:
         raise HTTPException(400, exc.detail) from exc
     return session.snapshot()

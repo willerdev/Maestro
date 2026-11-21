@@ -75,6 +75,7 @@ class ChainSessionRow(Base):
     failure_count: Mapped[int] = mapped_column(Integer, default=0)
     difficulty: Mapped[int] = mapped_column(Integer)
     cpu_percent: Mapped[int] = mapped_column(Integer)
+    device_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -89,6 +90,7 @@ class ChainHit(Base):
     block_hash: Mapped[str] = mapped_column(String(64))
     reward: Mapped[int] = mapped_column(BigInteger)
     hashes: Mapped[int] = mapped_column(BigInteger, default=0)
+    device_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
     found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -276,4 +278,28 @@ class MiningRewardLedger(Base):
     multiplier: Mapped[str] = mapped_column(String(16), default="1")
     reference: Mapped[str] = mapped_column(String(80))
     note: Mapped[str] = mapped_column(String(240), default="")
+    device_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserEarningCap(Base):
+    __tablename__ = "user_earning_caps"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    daily_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MiningComputer(Base):
+    __tablename__ = "mining_computers"
+    __table_args__ = (UniqueConstraint("user_id", "device_hash", name="uq_mining_computer_user_device"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    device_hash: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(160), default="")
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

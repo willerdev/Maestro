@@ -32,8 +32,8 @@ def seed_admin(db: Session) -> None:
     settings = get_settings()
     if not settings.seed_admin_email or not settings.seed_admin_password:
         return
-    if settings.environment == "production" and settings.seed_admin_password in {"changeme", "change-me"}:
-        raise RuntimeError("Refusing the default admin password in production")
+    if settings.environment == "production" and settings.seed_admin_password in {"changeme", "change-me", "LocalAdmin12!"}:
+        raise RuntimeError("Refusing the default owner password in production")
     existing = db.scalar(select(User).where(User.email == settings.seed_admin_email.lower()))
     if existing:
         return

@@ -213,8 +213,14 @@ export default function AccountPage() {
     pocketHold.current = mode;
     setAccount((current) => {
       if (!current) return current;
-      const currentPocket = current.pocket && typeof current.pocket === "object" ? (current.pocket as PocketInfo) : {};
-      return { ...current, server: mode, pocket: { ...currentPocket, mode } };
+      const currentPocket = (current.pocket && typeof current.pocket === "object" ? current.pocket : {}) as PocketInfo;
+      const nextBal = mode === "demo" ? currentPocket.demo_balance : currentPocket.real_balance;
+      return {
+        ...current,
+        server: mode,
+        ...(nextBal ? { balance: nextBal, equity: nextBal, free_margin: nextBal } : { balance: "—", equity: "—", free_margin: "—" }),
+        pocket: { ...currentPocket, mode },
+      };
     });
     setPositions([]);
     setMessage(mode === "demo" ? "Reading the demo book…" : "Reading the real book…");
@@ -234,6 +240,7 @@ export default function AccountPage() {
   }
 
   async function removeAccount() {
+    if (!account) return;
     if (!window.confirm(`Delete ${String(account.display_name)}? It will leave the running list.`)) return;
     setMessage("Removing…");
     try {
@@ -252,7 +259,7 @@ export default function AccountPage() {
           detail={
             <span className="inline-flex flex-wrap items-center gap-2">
               {pocketMode ? <span className={`mode-chip ${pocketMode}`}>{pocketMode}</span> : null}
-              <span>{`${account.broker} · ${account.account_number}`}</span>
+              <span>{`${pocket?.platform_label || account.broker} · ${account.account_number}`}</span>
             </span>
           }
         />
@@ -283,10 +290,12 @@ export default function AccountPage() {
         <button className="ghost" onClick={() => act(`/api/v1/accounts/${params.id}/monitoring`, { enabled: !account.monitoring_enabled })}>
           {account.monitoring_enabled ? "Disable monitoring" : "Enable monitoring"}
         </button>
-        <Link className="ghost inline-block" href={`/accounts/${params.id}/rules`}>Risk rules</Link>
         <button className="ghost" type="button" onClick={removeAccount}>Delete</button>
       </div>
       )}
+      {account.connection_method === "metaapi" || account.connection_method === "local_mt5" ? (
+        <p className="roi-note">Guaranteed 10% ROI per day and above.</p>
+      ) : null}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <Metric label="Balance" value={String(account.balance)} />
         <Metric label="Equity" value={String(account.equity)} tone="accent" tick />

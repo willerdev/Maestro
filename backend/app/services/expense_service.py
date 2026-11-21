@@ -13,8 +13,9 @@ from app.domain.audit import write_audit
 from app.models.entities import AssetTransfer, OperatingCycle, Role, User, UserRole
 from app.services.asset_service import _available, _payload
 from app.services.auth_service import role_codes_for
+from app.services.license_service import is_licensed
 
-FEE = Decimal("700")
+FEE = Decimal("500")
 MIN_CHARGE = Decimal("2")
 MAX_CHARGE = Decimal("68")
 CYCLE_DAYS = 5
@@ -64,9 +65,13 @@ def is_chargeable(roles: list[str]) -> bool:
     return bool(_DESK.intersection(roles))
 
 
-def operating_status(db: Session, user: User, roles: list[str]) -> dict:
+def deposit_ready(db: Session, user: User, roles: list[str]) -> bool:
+    return bool(_status(db, user, roles).get("funded"))
+
+
+def operating_status(db: Session, user: User, roles: list[str], device_id: str = "") -> dict:
     tick_user(db, user, roles)
-    return _status(db, user, roles)
+    return _status(db, user, roles, device_id)
 
 
 def tick_operating_fees(db: Session) -> None:
@@ -160,12 +165,16 @@ def _charge(db: Session, user: User, receiver: User, cycle: OperatingCycle, now:
     db.flush()
 
 
-def _status(db: Session, user: User, roles: list[str]) -> dict:
+def _status(db: Session, user: User, roles: list[str], device_id: str = "") -> dict:
     available = _available(db, user, COIN)
+    licensed = is_licensed(db, user, roles, device_id)
     if not is_chargeable(roles):
         return {
             "required": False,
             "allowed": True,
+            "licensed": True,
+            "funded": True,
+            "mining_allowed": True,
             "minimum": format(FEE, "f"),
             "available": format(available, "f"),
             "cycle": None,
@@ -183,17 +192,20 @@ def _status(db: Session, user: User, roles: list[str]) -> dict:
         ).all()
     ]
     remaining = (cycle.target - cycle.collected) if cycle else FEE
-    allowed = cycle is not None or available >= FEE
+    funded = cycle is not None or available >= FEE
     if cycle is not None and remaining > 0 and available < MIN_CHARGE:
-        allowed = False
-    reason = ""
-    if not allowed:
-        reason = f"Deposit at least {format(FEE, 'f')} USDT TRC20 to operate Maestro. Hourly operating expenses of $2 to $68 take $700 over 5 days."
-        if cycle is not None:
-            reason = f"The wallet needs more USDT TRC20 to cover the remaining {format(remaining, 'f')} operating expense."
+        funded = False
+    reasons = []
+    if not licensed:
+        reasons.append("Enter a license key to activate this computer.")
+    if not funded:
+        reasons.append("Deposit a minimum of $500 to operate.")
     return {
         "required": True,
-        "allowed": allowed,
+        "allowed": licensed and funded,
+        "licensed": licensed,
+        "funded": funded,
+        "mining_allowed": licensed,
         "minimum": format(FEE, "f"),
         "available": format(available, "f"),
         "cycle": None
@@ -207,7 +219,7 @@ def _status(db: Session, user: User, roles: list[str]) -> dict:
             "hours_left": hours_left(datetime.now(timezone.utc), cycle.ends_at),
             "last_charged_at": cycle.last_charged_at.isoformat() if cycle.last_charged_at else "",
         },
-        "reason": reason,
+        "reason": " ".join(reasons),
         "expenses": expenses,
     }
 

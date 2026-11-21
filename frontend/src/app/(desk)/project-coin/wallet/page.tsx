@@ -126,7 +126,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   return <div className="coin-stat"><span>{label}</span><strong className="num">{value}</strong></div>;
 }
 
-export function Activity({ rows }: { rows: ActivityItem[] }) {
+function Activity({ rows }: { rows: ActivityItem[] }) {
   return (
     <table className="coin-table">
       <thead><tr><th>Type</th><th>Amount</th><th>Status</th><th>When</th></tr></thead>

@@ -1,8 +1,9 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { ComputersPanel } from "@/components/project-coin/ComputersPanel";
 import { apiJson } from "@/lib/api";
-import type { HybridPlan } from "@/lib/coin";
+import type { HybridPlan, MiningComputer, MiningMinerGroup } from "@/lib/coin";
 
 type Settings = { paused: boolean; base_daily_pcoin: string; default_duration_days: number; max_multiplier: string };
 type Overview = {
@@ -17,11 +18,12 @@ type Overview = {
   month: { premium: string; pow: string; total: string };
   purchases: { reference: string; plan: string; amount: string; status: string; method: string; created_at: string }[];
 };
+type Miner = { user_id: string; email: string; plan: string; multiplier: string; expires_at: string; premium: string; mining: string; computers?: MiningComputer[] };
 type Miners = {
   premium: Miner[];
   free: Miner[];
+  computers?: MiningMinerGroup[];
 };
-type Miner = { user_id: string; email: string; plan: string; multiplier: string; expires_at: string; premium: string; mining: string };
 type Flag = { email: string; credited_today: string; expected_today: string; reason: string };
 
 export function HybridAdmin() {
@@ -151,6 +153,7 @@ export function HybridAdmin() {
         <h3 className="font-semibold mb-2">Free miners</h3>
         <MinerTable rows={miners?.free || []} empty="No free miners with a Project Coin wallet." />
       </section>
+      <ComputersPanel groups={miners?.computers || []} />
       <section className="coin-panel overflow-x-auto">
         <h3 className="font-semibold mb-2">Upgrade purchases</h3>
         <table className="coin-table">
@@ -196,7 +199,10 @@ function MinerTable({ rows, empty }: { rows: Miner[]; empty: string }) {
             <td>{row.email}</td>
             <td>{row.plan}</td>
             <td>{row.multiplier}x</td>
-            <td>{row.mining}</td>
+            <td>
+              {row.mining}
+              {row.computers?.length ? <span className="text-muted"> · {row.computers.length} computer{row.computers.length === 1 ? "" : "s"}</span> : null}
+            </td>
             <td className="num">{row.premium}</td>
             <td>{row.expires_at ? new Date(row.expires_at).toLocaleString() : "—"}</td>
           </tr>

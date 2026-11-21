@@ -32,7 +32,7 @@ export default function TransactionsPage() {
   function search(event: FormEvent) {
     event.preventDefault();
     setPage(0);
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(event.currentTarget as HTMLFormElement);
     setQuery(String(form.get("q") || ""));
   }
 

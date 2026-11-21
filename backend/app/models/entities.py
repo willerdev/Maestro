@@ -965,10 +965,23 @@ class OperatingCycle(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    target: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("700"))
+    target: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("500"))
     collected: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("0"))
     last_charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LicenseKey(Base):
+    __tablename__ = "license_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="available", index=True)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    device_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
+    bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

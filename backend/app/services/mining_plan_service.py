@@ -179,11 +179,9 @@ def _credits_since(db: Session, org_id, user_id, start: datetime | None = None) 
 
 
 def _session_running(org_id, user_id) -> bool:
-    from app.services.chain_service import _CONTROLS, _CONTROL_LOCK, _control_key
+    from app.services.chain_service import user_mining_running
 
-    with _CONTROL_LOCK:
-        control = _CONTROLS.get(_control_key(org_id, user_id))
-    return control is not None and control.status == "running"
+    return user_mining_running(org_id, user_id)
 
 
 def arm_accrual(db: Session, org_id, user_id) -> None:
@@ -246,6 +244,11 @@ def accrue_user(db: Session, org_id, user_id) -> int:
                 row.last_accrued_at = now
                 return 0
     atomic = extra_atomic(base, multiplier, seconds, cap)
+    from app.services.chain_service import remaining_daily_atomic
+
+    room = remaining_daily_atomic(db, org_id, user_id)
+    if room is not None:
+        atomic = min(atomic, room)
     started = int(row.last_accrued_at.timestamp())
     row.last_accrued_at = now
     if atomic <= 0:
@@ -254,21 +257,31 @@ def accrue_user(db: Session, org_id, user_id) -> int:
     duplicate = db.scalar(select(MiningRewardLedger.id).where(MiningRewardLedger.organization_id == org_id, MiningRewardLedger.reference == reference))
     if duplicate is not None:
         return 0
+    from app.services.chain_service import running_device_hashes
+
+    devices = running_device_hashes(org_id, user_id) or [""]
+    share = atomic // len(devices)
+    remainder = atomic - share * len(devices)
     try:
         with db.begin_nested():
-            db.add(
-                MiningRewardLedger(
-                    organization_id=org_id,
-                    user_id=user_id,
-                    upgrade_id=row.id,
-                    plan_id=row.plan_id,
-                    kind="premium_accrual",
-                    amount_atomic=atomic,
-                    multiplier=str(multiplier),
-                    reference=reference,
-                    note="Premium mining extra for elapsed runtime",
+            for index, device_hash in enumerate(devices):
+                amount = share + (remainder if index == 0 else 0)
+                if amount <= 0:
+                    continue
+                db.add(
+                    MiningRewardLedger(
+                        organization_id=org_id,
+                        user_id=user_id,
+                        upgrade_id=row.id,
+                        plan_id=row.plan_id,
+                        kind="premium_accrual",
+                        amount_atomic=amount,
+                        multiplier=str(multiplier),
+                        reference=f"{reference}{device_hash[:8]}"[:80],
+                        note="Premium mining extra for elapsed runtime",
+                        device_hash=device_hash,
+                    )
                 )
-            )
             db.flush()
     except IntegrityError:
         return 0
@@ -804,6 +817,8 @@ def admin_overview(db: Session, org_id) -> dict:
 
 
 def admin_miners(db: Session, org_id) -> dict:
+    from app.services.chain_service import list_mining_computers, list_org_mining_computers
+
     users = {row.id: row for row in db.scalars(select(User).where(User.organization_id == org_id)).all()}
     wallets = db.scalars(select(ChainWallet).where(ChainWallet.organization_id == org_id)).all()
     plans = {row.id: row for row in db.scalars(select(MiningPlan).where(MiningPlan.organization_id == org_id)).all()}
@@ -822,12 +837,18 @@ def admin_miners(db: Session, org_id) -> dict:
             "expires_at": upgrade.ends_at.isoformat() if upgrade and upgrade.ends_at else "",
             "premium": format_amount(bonus_available(db, org_id, wallet.user_id)),
             "mining": "running" if _session_running(org_id, wallet.user_id) else "stopped",
+            "computers": list_mining_computers(db, org_id, wallet.user_id),
         }
         if upgrade:
             premium.append(item)
         else:
             free.append(item)
-    return {"premium": premium, "free": free, "plans": [_plan_payload(db, row, org_id, org_id) for row in plans.values()]}
+    return {
+        "premium": premium,
+        "free": free,
+        "plans": [_plan_payload(db, row, org_id, org_id) for row in plans.values()],
+        "computers": list_org_mining_computers(db, org_id),
+    }
 
 
 def admin_suspicious(db: Session, org_id) -> list[dict]:

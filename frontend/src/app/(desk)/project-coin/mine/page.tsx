@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { HashChart } from "@/components/project-coin/CoinCharts";
+import { ComputersPanel } from "@/components/project-coin/ComputersPanel";
 import { apiJson } from "@/lib/api";
-import { Dashboard } from "@/lib/coin";
+import { Dashboard, MiningMinerGroup } from "@/lib/coin";
 
 export default function MiningPage() {
   const [data, setData] = useState<Dashboard | null>(null);
+  const [miners, setMiners] = useState<MiningMinerGroup[]>([]);
   const [error, setError] = useState("");
   const [cpu, setCpu] = useState(20);
   const mining = data?.mining;
@@ -16,10 +18,14 @@ export default function MiningPage() {
   useEffect(() => {
     let stop = false;
     function load() {
-      apiJson<Dashboard>("/api/v1/chain/dashboard?span=24h")
-        .then((body) => {
+      Promise.all([
+        apiJson<Dashboard>("/api/v1/chain/dashboard?span=24h"),
+        apiJson<{ miners: MiningMinerGroup[] }>("/api/v1/chain/mining/computers?everyone=1").catch(() => ({ miners: [] as MiningMinerGroup[] })),
+      ])
+        .then(([body, roster]) => {
           if (stop) return;
           setData(body);
+          setMiners(roster.miners || []);
           if (body.mining.cpu_percent) setCpu(body.mining.cpu_percent);
           setError("");
         })
@@ -71,6 +77,7 @@ export default function MiningPage() {
         <Stat label="Rejected" value={mining ? String(mining.failed) : "—"} />
         <Stat label="Difficulty" value={mining ? String(mining.difficulty) : "—"} />
       </div>
+      <ComputersPanel computers={miners.length ? undefined : mining?.computers} groups={miners.length ? miners : undefined} symbol={mining?.symbol} />
       <section className="coin-panel">
         <h2 className="font-semibold mb-2">Hash rate</h2>
         <HashChart rows={mining?.hashrate_samples || data?.series.hashrate || []} />

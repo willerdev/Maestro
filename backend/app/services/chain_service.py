@@ -12,8 +12,10 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_DOWN
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.chain.crypto import ADDRESS, address_for, new_keypair, public_from_private
@@ -23,14 +25,17 @@ from app.chain.money import UNIT, format_amount, parse_amount
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.encryption import decrypt_json, encrypt_json
-from app.models.chain_entities import ChainBlockRow, ChainHit, ChainNode, ChainSessionRow, ChainTxRow, ChainWallet
+from app.models.chain_entities import ChainBlockRow, ChainHit, ChainNode, ChainSessionRow, ChainTxRow, ChainWallet, MiningComputer, MiningRewardLedger
+from app.models.entities import LicenseKey, User
+from app.services.license_service import computer_name, mining_device_hash
 
 logger = logging.getLogger(__name__)
 
 _ORG_LOCKS: dict[str, threading.Lock] = {}
-_CONTROLS: dict[tuple[str, str], MinerControl] = {}
-_CPU_PREF: dict[tuple[str, str], int] = {}
+_CONTROLS: dict[tuple[str, str, str], MinerControl] = {}
+_CPU_PREF: dict[tuple[str, str, str], int] = {}
 _CONTROL_LOCK = threading.Lock()
+MAX_DEVICE_MINERS = 5
 
 
 class ChainServiceError(Exception):
@@ -494,11 +499,153 @@ def _clamp_cpu(value: int | None) -> int:
     return max(5, min(chosen, settings.chain_cpu_max))
 
 
-def _control_key(org_id, user_id) -> tuple[str, str]:
-    return str(org_id), str(user_id)
+def _control_key(org_id, user_id, device_hash: str = "") -> tuple[str, str, str]:
+    return str(org_id), str(user_id), device_hash or "_"
 
 
-def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
+def _controls_for_user(org_id, user_id) -> list[tuple[tuple[str, str, str], MinerControl]]:
+    org, user = str(org_id), str(user_id)
+    with _CONTROL_LOCK:
+        return [(key, control) for key, control in _CONTROLS.items() if key[0] == org and key[1] == user]
+
+
+def user_mining_running(org_id, user_id) -> bool:
+    return any(control.status == "running" for _key, control in _controls_for_user(org_id, user_id))
+
+
+def running_device_hashes(org_id, user_id) -> list[str]:
+    return [key[2] for key, control in _controls_for_user(org_id, user_id) if control.status == "running"]
+
+
+def touch_computer(db: Session, org_id, user_id, device_hash: str, user_agent: str = "") -> MiningComputer:
+    now = datetime.now(timezone.utc)
+    row = db.scalar(select(MiningComputer).where(MiningComputer.user_id == user_id, MiningComputer.device_hash == device_hash))
+    label = computer_name(user_agent, device_hash)
+    if row is None:
+        row = MiningComputer(
+            id=uuid4(),
+            organization_id=org_id,
+            user_id=user_id,
+            device_hash=device_hash,
+            label=label,
+            user_agent=(user_agent or "")[:300],
+            last_seen=now,
+        )
+        db.add(row)
+    else:
+        row.last_seen = now
+        if user_agent:
+            row.user_agent = user_agent[:300]
+            row.label = label
+    db.flush()
+    return row
+
+
+def list_mining_computers(db: Session, org_id, user_id, current_hash: str = "") -> list[dict]:
+    hashes: set[str] = set()
+    rows = list(db.scalars(select(MiningComputer).where(MiningComputer.organization_id == org_id, MiningComputer.user_id == user_id)).all())
+    by_hash = {row.device_hash: row for row in rows}
+    hashes.update(by_hash)
+    for key, _control in _controls_for_user(org_id, user_id):
+        hashes.add(key[2])
+    for hit_hash in db.scalars(select(ChainHit.device_hash).where(ChainHit.organization_id == org_id, ChainHit.user_id == user_id, ChainHit.device_hash != "")).all():
+        hashes.add(hit_hash)
+    for license_hash in db.scalars(select(LicenseKey.device_hash).where(LicenseKey.user_id == user_id, LicenseKey.status == "used", LicenseKey.device_hash != "")).all():
+        hashes.add(license_hash)
+    hashes.discard("")
+    hashes.discard("_")
+    live = {key[2]: control for key, control in _controls_for_user(org_id, user_id)}
+    pow_map = {
+        device: int(total or 0)
+        for device, total in db.execute(
+            select(ChainHit.device_hash, func.coalesce(func.sum(ChainHit.reward), 0)).where(
+                ChainHit.organization_id == org_id,
+                ChainHit.user_id == user_id,
+            ).group_by(ChainHit.device_hash)
+        ).all()
+    }
+    premium_map = {
+        device: int(total or 0)
+        for device, total in db.execute(
+            select(MiningRewardLedger.device_hash, func.coalesce(func.sum(MiningRewardLedger.amount_atomic), 0)).where(
+                MiningRewardLedger.organization_id == org_id,
+                MiningRewardLedger.user_id == user_id,
+                MiningRewardLedger.amount_atomic > 0,
+            ).group_by(MiningRewardLedger.device_hash)
+        ).all()
+    }
+    computers = []
+    for device_hash in hashes:
+        row = by_hash.get(device_hash)
+        control = live.get(device_hash)
+        pow_atomic = pow_map.get(device_hash, 0)
+        premium_atomic = premium_map.get(device_hash, 0)
+        status = control.status if control is not None else "stopped"
+        computers.append(
+            {
+                "id": device_hash[:12],
+                "label": row.label if row else computer_name("", device_hash),
+                "this_computer": device_hash == current_hash,
+                "status": status,
+                "hashrate": round(control.hashrate, 2) if control and status == "running" else 0,
+                "pow_mined": format_amount(pow_atomic),
+                "premium": format_amount(premium_atomic),
+                "earned": format_amount(pow_atomic + premium_atomic),
+                "last_seen": row.last_seen.isoformat() if row and row.last_seen else "",
+            }
+        )
+    computers.sort(key=lambda item: (0 if item["this_computer"] else 1, 0 if item["status"] == "running" else 1, item["label"]))
+    return computers
+
+
+def list_org_mining_computers(db: Session, org_id, current_user_id=None, current_hash: str = "") -> list[dict]:
+    users = {row.id: row for row in db.scalars(select(User).where(User.organization_id == org_id)).all()}
+    groups = []
+    for user in sorted(users.values(), key=lambda item: item.email):
+        computers = list_mining_computers(db, org_id, user.id, current_hash if current_user_id == user.id else "")
+        if not computers:
+            continue
+        groups.append(
+            {
+                "user_id": str(user.id),
+                "email": user.email,
+                "full_name": user.full_name,
+                "computers": computers,
+            }
+        )
+    return groups
+
+
+def remaining_daily_atomic(db: Session, org_id, user_id) -> int | None:
+    """Atomic PCoin still allowed today. None means this login has no daily cap."""
+    from app.models.chain_entities import UserEarningCap
+    from app.services.conversion_service import public_settings
+
+    row = db.get(UserEarningCap, user_id)
+    if row is None or row.daily_usdt <= 0:
+        return None
+    rate = Decimal(str(public_settings(db, org_id)["rate"]))
+    cap = int((Decimal(row.daily_usdt) * rate * Decimal(UNIT)).to_integral_value(rounding=ROUND_DOWN))
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    mined = db.scalar(
+        select(func.coalesce(func.sum(ChainHit.reward), 0)).where(
+            ChainHit.organization_id == org_id,
+            ChainHit.user_id == user_id,
+            ChainHit.found_at >= start,
+        )
+    )
+    bonus = db.scalar(
+        select(func.coalesce(func.sum(MiningRewardLedger.amount_atomic), 0)).where(
+            MiningRewardLedger.organization_id == org_id,
+            MiningRewardLedger.user_id == user_id,
+            MiningRewardLedger.amount_atomic > 0,
+            MiningRewardLedger.created_at >= start,
+        )
+    )
+    return max(0, cap - int(mined or 0) - int(bonus or 0))
+
+
+def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int, device_hash: str = ""):
     if stop.is_set() or pause.is_set():
         return None
     db = SessionLocal()
@@ -507,6 +654,10 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
 
         if mining_paused(db, org_id):
             time.sleep(1)
+            return None
+        room = remaining_daily_atomic(db, org_id, user_id)
+        if room is not None and room <= 0:
+            time.sleep(30)
             return None
     finally:
         db.close()
@@ -517,6 +668,10 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
         with _lock(org_id):
             ledger = load_ledger(db, org_id)
             block = ledger.candidate(address, int(time.time()))
+        room = remaining_daily_atomic(db, org_id, user_id)
+        if room is not None and block.reward > room:
+            time.sleep(30)
+            return None
     except ChainServiceError:
         return None
     finally:
@@ -530,6 +685,14 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
         return None
     db = SessionLocal()
     try:
+        room = remaining_daily_atomic(db, org_id, user_id)
+        if room is not None and block.reward > room:
+            time.sleep(30)
+            return None
+    finally:
+        db.close()
+    db = SessionLocal()
+    try:
         with _lock(org_id):
             ledger = load_ledger(db, org_id)
             try:
@@ -539,7 +702,7 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
                 return None
             _insert_block(db, org_id, block)
             earned = block.reward_tx.amount if block.reward_tx is not None else 0
-            db.add(ChainHit(organization_id=org_id, user_id=user_id, height=block.index, block_hash=block.block_hash(), reward=earned, hashes=hashes))
+            db.add(ChainHit(organization_id=org_id, user_id=user_id, height=block.index, block_hash=block.block_hash(), reward=earned, hashes=hashes, device_hash=device_hash))
             db.commit()
         logger.info("chain_block_accepted org=%s height=%s", org_id, block.index)
         return block.block_hash()
@@ -551,7 +714,19 @@ def _mine_round(stop, pause, control: MinerControl, org_id, user_id, cpu: int):
         db.close()
 
 
-def start_mining(db: Session, org_id, user_id, cpu_percent: int | None) -> dict:
+def resume_capped_miners(db: Session) -> None:
+    """Keep a capped Project Coin miner running inside this API process."""
+    from app.models.chain_entities import UserEarningCap
+
+    rows = list(db.scalars(select(UserEarningCap)).all())
+    for row in rows:
+        try:
+            start_mining(db, row.organization_id, row.user_id, 30, "maestro-server", "maestro")
+        except ChainServiceError as exc:
+            logger.info("capped_miner_not_started user=%s detail=%s", row.user_id, exc.detail)
+
+
+def start_mining(db: Session, org_id, user_id, cpu_percent: int | None, device_id: str = "", user_agent: str = "") -> dict:
     from app.services.mining_plan_service import MiningPlanError, arm_accrual, assert_mining_allowed
 
     try:
@@ -559,78 +734,109 @@ def start_mining(db: Session, org_id, user_id, cpu_percent: int | None) -> dict:
     except MiningPlanError as exc:
         raise ChainServiceError(exc.status, exc.detail) from exc
     _require_wallet(db, org_id, user_id)
-    key = _control_key(org_id, user_id)
+    device_hash = mining_device_hash(device_id)
+    touch_computer(db, org_id, user_id, device_hash, user_agent)
+    key = _control_key(org_id, user_id, device_hash)
     cpu = _clamp_cpu(cpu_percent if cpu_percent is not None else _CPU_PREF.get(key))
     _CPU_PREF[key] = cpu
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
+        active = [
+            item
+            for item_key, item in _CONTROLS.items()
+            if item_key[0] == str(org_id) and item_key[1] == str(user_id) and item.status in {"running", "paused"}
+        ]
         if control is None or control.status == "stopped":
-            control = MinerControl(lambda stop, pause, ctl: _mine_round(stop, pause, ctl, org_id, user_id, cpu), cpu)
+            if len(active) >= MAX_DEVICE_MINERS:
+                raise ChainServiceError(409, "Stop mining on another computer first. Up to 5 computers can mine on this login.")
+            control = MinerControl(lambda stop, pause, ctl: _mine_round(stop, pause, ctl, org_id, user_id, cpu, device_hash), cpu)
             _CONTROLS[key] = control
             control.start()
-            db.add(ChainSessionRow(organization_id=org_id, user_id=user_id, status="running", difficulty=coin_params().difficulty, cpu_percent=cpu))
+            db.add(
+                ChainSessionRow(
+                    organization_id=org_id,
+                    user_id=user_id,
+                    status="running",
+                    difficulty=coin_params().difficulty,
+                    cpu_percent=cpu,
+                    device_hash=device_hash,
+                )
+            )
             arm_accrual(db, org_id, user_id)
             db.commit()
         elif control.status == "paused":
             control.resume()
             arm_accrual(db, org_id, user_id)
-    return mining_status(db, org_id, user_id)
+    return mining_status(db, org_id, user_id, device_id, user_agent)
 
 
-def stop_mining(db: Session, org_id, user_id) -> dict:
+def stop_mining(db: Session, org_id, user_id, device_id: str = "", user_agent: str = "") -> dict:
     from app.services.mining_plan_service import flush_accrual
 
     flush_accrual(db, org_id, user_id)
-    key = _control_key(org_id, user_id)
+    device_hash = mining_device_hash(device_id)
+    key = _control_key(org_id, user_id, device_hash)
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
     if control is not None:
         control.stop()
-    _close_session(db, org_id, user_id, "stopped")
-    return mining_status(db, org_id, user_id)
+    _close_session(db, org_id, user_id, "stopped", device_hash)
+    return mining_status(db, org_id, user_id, device_id, user_agent)
 
 
-def pause_mining(db: Session, org_id, user_id) -> dict:
-    key = _control_key(org_id, user_id)
+def pause_mining(db: Session, org_id, user_id, device_id: str = "", user_agent: str = "") -> dict:
+    device_hash = mining_device_hash(device_id)
+    key = _control_key(org_id, user_id, device_hash)
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
     if control is None or control.status == "stopped":
-        raise ChainServiceError(409, "Mining is not running")
+        raise ChainServiceError(409, "Mining is not running on this computer")
     from app.services.mining_plan_service import flush_accrual
 
     flush_accrual(db, org_id, user_id)
     control.pause()
-    return mining_status(db, org_id, user_id)
+    return mining_status(db, org_id, user_id, device_id, user_agent)
 
 
-def resume_mining(db: Session, org_id, user_id) -> dict:
-    key = _control_key(org_id, user_id)
+def resume_mining(db: Session, org_id, user_id, device_id: str = "", user_agent: str = "") -> dict:
+    device_hash = mining_device_hash(device_id)
+    key = _control_key(org_id, user_id, device_hash)
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
     if control is None or control.status != "paused":
-        raise ChainServiceError(409, "Mining is not paused")
+        raise ChainServiceError(409, "Mining is not paused on this computer")
     from app.services.mining_plan_service import arm_accrual
 
     control.resume()
     arm_accrual(db, org_id, user_id)
-    return mining_status(db, org_id, user_id)
+    return mining_status(db, org_id, user_id, device_id, user_agent)
 
 
-def _close_session(db: Session, org_id, user_id, status: str) -> None:
-    row = db.scalar(select(ChainSessionRow).where(ChainSessionRow.organization_id == org_id, ChainSessionRow.user_id == user_id, ChainSessionRow.stopped_at.is_(None)).order_by(ChainSessionRow.started_at.desc()))
+def _close_session(db: Session, org_id, user_id, status: str, device_hash: str = "") -> None:
+    query = select(ChainSessionRow).where(
+        ChainSessionRow.organization_id == org_id,
+        ChainSessionRow.user_id == user_id,
+        ChainSessionRow.stopped_at.is_(None),
+    )
+    if device_hash:
+        query = query.where(ChainSessionRow.device_hash == device_hash)
+    row = db.scalar(query.order_by(ChainSessionRow.started_at.desc()))
     if row is not None:
         row.status = status
         row.stopped_at = datetime.now(timezone.utc)
         db.commit()
 
 
-def mining_status(db: Session, org_id, user_id) -> dict:
+def mining_status(db: Session, org_id, user_id, device_id: str = "", user_agent: str = "") -> dict:
     from app.services.mining_plan_service import accrue_user, hybrid_overview
 
     accrue_user(db, org_id, user_id)
     ledger = load_ledger(db, org_id)
     wallet = _wallet(db, org_id, user_id)
-    key = _control_key(org_id, user_id)
+    device_hash = mining_device_hash(device_id) if device_id else mining_device_hash("")
+    if device_id:
+        touch_computer(db, org_id, user_id, device_hash, user_agent)
+    key = _control_key(org_id, user_id, device_hash)
     with _CONTROL_LOCK:
         control = _CONTROLS.get(key)
     status = control.status if control is not None else "stopped"
@@ -659,11 +865,13 @@ def mining_status(db: Session, org_id, user_id) -> dict:
         "coin": _params_row(ledger.params),
         "hashrate_samples": list(control.samples) if control else [],
         "hybrid": hybrid_overview(db, org_id, user_id),
+        "this_computer": device_hash[:6],
+        "computers": list_mining_computers(db, org_id, user_id, device_hash),
     }
 
 
-def mining_statistics(db: Session, org_id, user_id) -> dict:
-    status = mining_status(db, org_id, user_id)
+def mining_statistics(db: Session, org_id, user_id, device_id: str = "", user_agent: str = "") -> dict:
+    status = mining_status(db, org_id, user_id, device_id, user_agent)
     hits = list(db.scalars(select(ChainHit).where(ChainHit.organization_id == org_id, ChainHit.user_id == user_id).order_by(ChainHit.found_at.desc()).limit(20)))
     status["history"] = [
         {"height": hit.height, "hash": hit.block_hash, "reward": format_amount(int(hit.reward)), "hashes": int(hit.hashes), "found_at": hit.found_at.isoformat()}
@@ -674,15 +882,15 @@ def mining_statistics(db: Session, org_id, user_id) -> dict:
     return status
 
 
-def set_cpu(db: Session, org_id, user_id, cpu_percent: int) -> dict:
+def set_cpu(db: Session, org_id, user_id, cpu_percent: int, device_id: str = "", user_agent: str = "") -> dict:
     cpu = _clamp_cpu(cpu_percent)
-    key = _control_key(org_id, user_id)
+    key = _control_key(org_id, user_id, mining_device_hash(device_id))
     with _CONTROL_LOCK:
         _CPU_PREF[key] = cpu
         control = _CONTROLS.get(key)
     if control is not None:
         control.cpu_percent = cpu
-    return mining_status(db, org_id, user_id)
+    return mining_status(db, org_id, user_id, device_id, user_agent)
 
 
 def _span_start(span: str) -> int | None:
@@ -744,9 +952,9 @@ def account_activity(db: Session, org_id, user_id, span: str = "all", kind: str 
     return {"total": len(matched), "items": matched[offset:offset + limit]}
 
 
-def dashboard(db: Session, org_id, user_id, span: str = "all") -> dict:
+def dashboard(db: Session, org_id, user_id, span: str = "all", device_id: str = "", user_agent: str = "") -> dict:
     wallet = _wallet(db, org_id, user_id)
-    status = mining_status(db, org_id, user_id)
+    status = mining_status(db, org_id, user_id, device_id, user_agent)
     ledger = load_ledger(db, org_id)
     address = wallet.address if wallet is not None else ""
     view = None

@@ -33,7 +33,7 @@ def place_order(db: Session, user: User, account: Account, payload: dict, *, act
         raise OrderError(400, "Unsupported order")
     if account.connection_method == "pocketoption":
         if action not in _OPEN:
-            raise OrderError(400, "Pocket Option only opens timed trades")
+            raise OrderError(400, "Options Trading only opens timed trades")
         return _open_pocket(db, user, account, payload, actor)
     if account.connection_method not in {"metaapi", "passprop"}:
         raise OrderError(400, "This connection cannot place trades")
@@ -117,9 +117,9 @@ def _open_pocket(db: Session, user: User, account: Account, payload: dict, actor
     try:
         placed = PocketOptionConnector().open_binary(credentials, symbol=symbol, side=side, amount=amount, duration=duration)
     except Exception as exc:  # noqa: BLE001
-        raise OrderError(400, str(exc) or "Pocket Option did not take the trade") from exc
+        raise OrderError(400, str(exc) or "The options platform did not take the trade") from exc
     if not placed.get("ok"):
-        raise OrderError(400, str(placed.get("message") or "Pocket Option rejected the trade"))
+        raise OrderError(400, str(placed.get("message") or "The options platform rejected the trade"))
     ticket = str(placed.get("ticket") or "")
     entry = _decimal(placed.get("price") or 0, "0")
     if ticket:

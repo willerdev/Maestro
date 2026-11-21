@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, apiJson, clearSession, isSystemAdmin, type User } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -17,13 +17,6 @@ const MENUS: { label: string; items: MenuItem[] }[] = [
       ["/accounts", "Accounts", "wallet", "user"],
       ["/trades", "Trades", "swap", "user"],
       ["/journal", "Journal", "book", "user"],
-    ],
-  },
-  {
-    label: "Risk",
-    items: [
-      ["/risk-engine", "Risk Engine", "shield", "user"],
-      ["/risk-rules", "Risk Rules", "sliders", "user"],
     ],
   },
   { label: "Funds", items: [["/funds", "Funds", "fund", "user"]] },
@@ -41,7 +34,7 @@ const MENUS: { label: string; items: MenuItem[] }[] = [
       ["/contracts", "Contracts", "contract", "user"],
       ["/pass-props", "Pass Props", "shield", "user"],
       ["/project-coin", "Project Coin", "coin", "user"],
-      ["/webhooks", "Webhooks", "link", "user"],
+      ["/webhooks", "Webhooks", "link", "desk"],
       ["/payments", "Payments", "card", "user"],
       ["/telegram", "Telegram", "send", "user"],
     ],
@@ -60,6 +53,9 @@ const MENUS: { label: string; items: MenuItem[] }[] = [
 ];
 
 const DESK_ROLES = ["SUPER_ADMIN", "ADMIN", "RISK_MANAGER", "TRADER", "VIEWER"];
+const PHONE = 1024;
+const ICON = 40;
+const ICON_GAP = 2;
 
 function menusFor(roles: string[]) {
   const admin = isSystemAdmin(roles);
@@ -101,7 +97,7 @@ export function homeFor(roles: string[]) {
   return "/pending";
 }
 
-type IconName = "grid" | "wallet" | "layers" | "swap" | "book" | "shield" | "sliders" | "bell" | "chart" | "file" | "link" | "key" | "card" | "send" | "gear" | "lock" | "list" | "fund" | "users" | "coin" | "contract" | "mine";
+type IconName = "grid" | "wallet" | "layers" | "swap" | "book" | "shield" | "sliders" | "bell" | "chart" | "file" | "link" | "key" | "card" | "send" | "gear" | "lock" | "list" | "fund" | "users" | "coin" | "contract" | "mine" | "more";
 
 function Icon({ name }: { name: IconName }) {
   const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -129,6 +125,13 @@ function Icon({ name }: { name: IconName }) {
       {name === "coin" ? <path {...common} d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 12h6" /> : null}
       {name === "contract" ? <path {...common} d="M7 3h7l5 5v13H7zM14 3v5h5M9 13h6M9 17h4" /> : null}
       {name === "mine" ? <path {...common} d="M4 20h16M9 20l7-11 4 2-7 9M14 9l4-4" /> : null}
+      {name === "more" ? (
+        <>
+          <circle cx="6" cy="12" r="1.7" fill="currentColor" />
+          <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+          <circle cx="18" cy="12" r="1.7" fill="currentColor" />
+        </>
+      ) : null}
     </svg>
   );
 }
@@ -139,8 +142,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [locked, setLocked] = useState(false);
-  const menuRef = useRef<HTMLElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(99);
+  const iconsRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,25 +164,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
           return;
         }
         if (pathname !== "/setup" && pathname !== "/contracts") {
-          const setup = await apiJson<{ complete: boolean }>("/api/v1/setup/status");
-          if (!setup.complete) {
-            router.replace("/setup");
+          try {
+            const setup = await apiJson<{ complete: boolean }>("/api/v1/setup/status");
+            if (!setup.complete) {
+              router.replace("/setup");
+              return;
+            }
+          } catch {
+            if (!cancelled) setReady(true);
             return;
           }
         }
-        apiJson<{ allowed: boolean }>("/api/v1/operating-status")
-          .then((ops) => {
-            if (cancelled) return;
-            setLocked(!ops.allowed);
-            const open = pathname === "/dashboard" || pathname === "/wallet" || pathname === "/payments" || pathname === "/settings";
-            if (!ops.allowed && !open) {
-              router.replace("/dashboard");
-            }
-            setReady(true);
-          })
-          .catch(() => {
-            if (!cancelled) setReady(true);
-          });
+        if (!cancelled) setReady(true);
       })
       .catch(() => router.replace("/login"));
     return () => {
@@ -187,15 +185,52 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setOpenMenu(null);
+    setMoreOpen(false);
   }, [pathname]);
 
   useEffect(() => {
-    function close(event: MouseEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) setOpenMenu(null);
+    function close(event: Event) {
+      const node = event.target as Node | null;
+      if (moreRef.current?.contains(node) || (node instanceof Element && node.closest(".desk-menu, .desk-drop"))) return;
+      setOpenMenu(null);
+      setMoreOpen(false);
     }
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
   }, []);
+
+  const menus = menusFor(user?.roles || []).filter((menu) => menu.items.length);
+  const links = menus.flatMap((menu) => menu.items);
+  const showScopes = isSystemAdmin(user?.roles);
+  const extra = links.slice(visibleCount);
+  const moreOn = extra.some(([href]) => pathname === href || pathname.startsWith(`${href}/`));
+
+  useLayoutEffect(() => {
+    const bar = iconsRef.current;
+    function fit() {
+      const phone = window.matchMedia(`(max-width: ${PHONE}px)`).matches;
+      if (!bar || !phone) {
+        setVisibleCount(links.length);
+        return;
+      }
+      const width = Math.floor(bar.clientWidth);
+      const shown = Math.floor((width + ICON_GAP) / (ICON + ICON_GAP));
+      if (shown >= links.length) {
+        setVisibleCount(links.length);
+        return;
+      }
+      setVisibleCount(Math.max(0, Math.min(links.length - 1, shown)));
+    }
+    fit();
+    if (!bar) return;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    observer?.observe(bar);
+    window.addEventListener("resize", fit);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, [links.length, ready]);
 
   async function logout() {
     await api("/api/v1/auth/logout", { method: "POST" });
@@ -206,14 +241,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
   if (!ready) {
     return <div className="min-h-screen grid place-items-center text-muted">Loading desk…</div>;
   }
-
-  const menus = menusFor(user?.roles || []).map((menu) => (
-    locked
-      ? { ...menu, items: menu.items.filter(([href]) => href === "/dashboard" || href === "/wallet" || href === "/payments" || href === "/settings") }
-      : menu
-  )).filter((menu) => menu.items.length);
-  const links = menus.flatMap((menu) => menu.items);
-  const showScopes = isSystemAdmin(user?.roles);
 
   return (
     <div className="desk-shell">
@@ -240,7 +267,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </aside>
       <div className="desk-main">
         <header className="desk-top">
-          <nav className="desk-menu" ref={menuRef}>
+          <Link href="/dashboard" className="desk-mark phone-mark" title="Maestro">M</Link>
+          <nav className="desk-menu">
             {menus.map((menu) => {
               const active = menu.items.some(([href]) => pathname === href || pathname.startsWith(`${href}/`));
               const group = menuScope(menu.items);
@@ -292,6 +320,49 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 </div>
               );
             })}
+          </nav>
+          <nav className={`desk-icons${moreOpen ? " open" : ""}`}>
+            <div className="desk-icon-row" ref={iconsRef}>
+              {links.slice(0, visibleCount).map(([href, label, icon]) => {
+                const on = pathname === href || pathname.startsWith(`${href}/`);
+                return (
+                  <Link key={href} href={href} className={`desk-icon${on ? " on" : ""}`} title={label} aria-label={label}>
+                    <Icon name={icon} />
+                  </Link>
+                );
+              })}
+            </div>
+            {extra.length ? (
+              <div className="desk-more" ref={moreRef}>
+                <button
+                  type="button"
+                  className={`desk-icon${moreOn || moreOpen ? " on" : ""}`}
+                  aria-label="More"
+                  aria-expanded={moreOpen}
+                  title="More"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMoreOpen((open) => !open);
+                  }}
+                >
+                  <Icon name="more" />
+                </button>
+                {moreOpen ? (
+                  <div className="desk-sub">
+                    {extra.map(([href, label, icon]) => {
+                      const on = pathname === href || pathname.startsWith(`${href}/`);
+                      return (
+                        <Link key={href} href={href} className={on ? "on" : ""}>
+                          <Icon name={icon} />
+                          {label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </nav>
           <div className="desk-user">
             {showScopes ? (

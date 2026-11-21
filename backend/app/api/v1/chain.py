@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_db, get_principal
 from app.core.rate_limit import WindowLimiter
-from app.services.chain_service import ChainServiceError, account_activity, block_detail, create_wallet, dashboard, export_wallet, import_wallet, list_blocks, list_transactions, mining_statistics, mining_status, network_status, pause_mining, resume_mining, search, send_coins, set_cpu, start_mining, stop_mining, transaction_detail, wallet_transactions, wallet_view
+from app.domain.rbac import allows
+from app.services.chain_service import ChainServiceError, account_activity, block_detail, create_wallet, dashboard, export_wallet, import_wallet, list_blocks, list_mining_computers, list_org_mining_computers, list_transactions, mining_statistics, mining_status, network_status, pause_mining, resume_mining, search, send_coins, set_cpu, start_mining, stop_mining, touch_computer, transaction_detail, wallet_transactions, wallet_view
 from app.services.conversion_service import ConversionServiceError, convert, export_csv, list_conversions, preview, report, update_settings, wallet_conversion, public_settings
 from app.services.mining_plan_service import MiningPlanError, admin_miners, admin_overview, admin_suspicious, hybrid_overview, list_plans, list_reward_rows, list_upgrade_payments, purchase_upgrade, save_plan, settings_payload, update_settings as update_mining_settings
 
@@ -83,6 +84,10 @@ def _guard(principal: Principal, action: str) -> None:
         raise HTTPException(status_code=429, detail="Too many chain requests. Wait a minute.")
 
 
+def _device(request: Request) -> tuple[str, str]:
+    return request.headers.get("x-device-id") or "", (request.headers.get("user-agent") or "")[:300]
+
+
 @router.post("/wallet")
 def create(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.mine")
@@ -133,51 +138,80 @@ def send(body: SendBody, principal: Principal = Depends(get_principal), db: Sess
 
 
 @router.post("/mining/start")
-def start(body: MineBody | None = None, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def start(request: Request, body: MineBody | None = None, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.mine")
     _guard(principal, "start")
     cpu = body.cpu_percent if body else None
-    return _run(lambda: start_mining(db, principal.user.organization_id, principal.user.id, cpu))
+    device_id, user_agent = _device(request)
+    return _run(lambda: start_mining(db, principal.user.organization_id, principal.user.id, cpu, device_id, user_agent))
 
 
 @router.post("/mining/stop")
-def stop(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def stop(request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.mine")
-    return _run(lambda: stop_mining(db, principal.user.organization_id, principal.user.id))
+    device_id, user_agent = _device(request)
+    return _run(lambda: stop_mining(db, principal.user.organization_id, principal.user.id, device_id, user_agent))
 
 
 @router.post("/mining/pause")
-def pause(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def pause(request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.mine")
-    return _run(lambda: pause_mining(db, principal.user.organization_id, principal.user.id))
+    device_id, user_agent = _device(request)
+    return _run(lambda: pause_mining(db, principal.user.organization_id, principal.user.id, device_id, user_agent))
 
 
 @router.post("/mining/resume")
-def resume(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def resume(request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.mine")
-    return _run(lambda: resume_mining(db, principal.user.organization_id, principal.user.id))
+    device_id, user_agent = _device(request)
+    return _run(lambda: resume_mining(db, principal.user.organization_id, principal.user.id, device_id, user_agent))
 
 
 @router.get("/mining/status")
-def status(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def status(request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.read")
-    body = _run(lambda: mining_status(db, principal.user.organization_id, principal.user.id))
+    device_id, user_agent = _device(request)
+    body = _run(lambda: mining_status(db, principal.user.organization_id, principal.user.id, device_id, user_agent))
     db.commit()
     return body
 
 
 @router.post("/mining/cpu")
-def cpu(body: MineBody, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def cpu(request: Request, body: MineBody, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.mine")
     if body.cpu_percent is None:
         raise HTTPException(status_code=400, detail="Choose a CPU limit")
-    return _run(lambda: set_cpu(db, principal.user.organization_id, principal.user.id, body.cpu_percent))
+    device_id, user_agent = _device(request)
+    return _run(lambda: set_cpu(db, principal.user.organization_id, principal.user.id, body.cpu_percent, device_id, user_agent))
+
+
+@router.get("/mining/computers")
+def computers(request: Request, everyone: bool = Query(default=False), principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("chain.read")
+    device_id, user_agent = _device(request)
+    if everyone:
+        if not (allows(principal.roles, "users.manage") or allows(principal.roles, "chain.admin")):
+            raise HTTPException(status_code=403, detail="Missing permission")
+        from app.services.license_service import mining_device_hash as _hash
+
+        body = _run(lambda: {"miners": list_org_mining_computers(db, principal.user.organization_id, principal.user.id, _hash(device_id))})
+        db.commit()
+        return body
+    from app.services.license_service import mining_device_hash
+
+    device_hash = mining_device_hash(device_id)
+    if device_id:
+        touch_computer(db, principal.user.organization_id, principal.user.id, device_hash, user_agent)
+    body = _run(lambda: {"computers": list_mining_computers(db, principal.user.organization_id, principal.user.id, device_hash)})
+    db.commit()
+    return body
 
 
 @router.get("/dashboard")
-def overview(span: str = Query(default="all"), principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def overview(request: Request, span: str = Query(default="all"), principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.read")
-    body = _run(lambda: dashboard(db, principal.user.organization_id, principal.user.id, span))
+    device_id, user_agent = _device(request)
+    body = _run(lambda: dashboard(db, principal.user.organization_id, principal.user.id, span, device_id, user_agent))
     db.commit()
     return body
 
@@ -197,9 +231,10 @@ def activity(
 
 
 @router.get("/mining/statistics")
-def statistics(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def statistics(request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("chain.read")
-    body = _run(lambda: mining_statistics(db, principal.user.organization_id, principal.user.id))
+    device_id, user_agent = _device(request)
+    body = _run(lambda: mining_statistics(db, principal.user.organization_id, principal.user.id, device_id, user_agent))
     db.commit()
     return body
 

@@ -48,7 +48,18 @@ npm run dev
 
 Open http://localhost:3000. With the example env, sign in as `admin@example.com` / `LocalAdmin12!`. That password is for local development only. Change it before any shared deployment.
 
-## Docker
+## Production (run anywhere)
+
+Requires Docker. From `tradeguard/`:
+
+```bash
+chmod +x scripts/run-production.sh
+./scripts/run-production.sh
+```
+
+That builds images, starts Postgres, Redis, the API, the worker, the desk, and a reverse proxy on port **8080**. Full steps are in `docs/run-production.md`.
+
+## Local Docker
 
 From `tradeguard/`, after copying `.env.example` to `.env`:
 

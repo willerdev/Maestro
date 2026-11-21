@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import websockets
 
+from app.connectors.options_platforms import BROWSER_SESSION, is_pocket_live, platform_label, platform_of
 from app.connectors.types import ConnectionTest, NormalizedAccount, NormalizedPosition
 
 _DEMO_URLS = (
@@ -158,13 +159,17 @@ def format_ssid(wire: str, is_demo: bool, uid: str = "") -> str:
     session = str((parsed or {}).get("session") or "")
     uid_text = str((parsed or {}).get("uid") or uid or "")
     platform = int((parsed or {}).get("platform") or 1)
-    if parsed and session and bool(parsed.get("is_demo")) == bool(is_demo):
-        return parsed.get("wire") or text
     if not session:
         if text.startswith("42") or len(text) < 8:
             return ""
         session = text
-    body = {"session": session, "isDemo": 1 if is_demo else 0, "uid": int(uid_text) if uid_text.isdigit() else 0, "platform": platform or 1}
+    body = {
+        "session": session,
+        "isDemo": 1 if is_demo else 0,
+        "uid": int(uid_text) if uid_text.isdigit() else 0,
+        "platform": platform or 1,
+        "isFastHistory": True,
+    }
     return '42["auth",' + json.dumps(body, separators=(",", ":")) + "]"
 
 
@@ -187,16 +192,19 @@ class PocketOptionConnector:
     name = "pocketoption"
 
     def inspect(self, credentials: dict) -> dict:
+        platform = platform_of(credentials)
+        label = platform_label(platform)
         uid = str(credentials.get("uid") or "").strip()
         demo_ssid = str(credentials.get("demo_ssid") or "").strip()
         real_ssid = str(credentials.get("real_ssid") or "").strip()
-        if not uid and not (demo_ssid or real_ssid):
-            return _fail("missing_session", "Sign in through the Pocket Option window first")
+        signed_in = bool(credentials.get("session_ok") or demo_ssid or real_ssid or uid)
+        if not signed_in:
+            return _fail("missing_session", f"Sign in through the {label} window first")
         demo = _side_state(credentials, "demo", uid, placeholder=True)
         real = _side_state(credentials, "real", uid, placeholder=True)
         uid = str((real or demo or {}).get("uid") or uid or "").strip()
         if not uid or not (demo or real):
-            return _fail("missing_session", "Sign in through the Pocket Option window first")
+            return _fail("missing_session", f"Sign in through the {label} window first")
         mode = _active_mode(credentials, bool(real), bool(demo))
         shown = (demo if mode == "demo" else real) or real or demo or {}
         parts = []
@@ -213,9 +221,9 @@ class PocketOptionConnector:
             "demo": demo,
             "real": real,
             "account": {
-                "display_name": "Pocket Option",
+                "display_name": label,
                 "account_number": uid,
-                "broker": "Pocket Option",
+                "broker": label,
                 "server": mode,
                 "currency": shown.get("currency") or "USD",
                 "leverage": "1",
@@ -232,17 +240,19 @@ class PocketOptionConnector:
         return ConnectionTest(result["ok"], result["status"], result.get("error_code") or "", result.get("detail") or "")
 
     def fetch_account(self, credentials: dict) -> NormalizedAccount:
-        live = _preferred_live(credentials)
+        live = _preferred_live(credentials) if is_pocket_live(credentials) else _saved_book(credentials)
         if live is None:
-            raise RuntimeError("Pocket Option did not return a live balance")
+            raise RuntimeError(f"{platform_label(platform_of(credentials))} did not return a live balance")
         balance = Decimal(live["balance"])
         equity = Decimal(live.get("equity") or live["balance"])
         return NormalizedAccount(balance=balance, equity=equity, margin=Decimal("0"), free_margin=balance, margin_level=None, currency=live.get("currency") or "USD")
 
     def fetch_positions(self, credentials: dict) -> list[NormalizedPosition]:
+        if not is_pocket_live(credentials):
+            return []
         live = _preferred_live(credentials)
         if live is None:
-            raise RuntimeError("Pocket Option did not return open trades")
+            raise RuntimeError(f"{platform_label(platform_of(credentials))} did not return open trades")
         rows: list[NormalizedPosition] = []
         for deal in live.get("deals") or []:
             if not isinstance(deal, dict):
@@ -290,6 +300,9 @@ class PocketOptionConnector:
         has_demo = bool(str(credentials.get("demo_ssid") or credentials.get("real_ssid") or "").strip())
         is_demo = _active_mode(credentials, has_real, has_demo) == "demo"
         ssid = format_ssid(_session_wire(credentials, is_demo), is_demo, uid)
+        if not is_pocket_live(credentials) or not ssid or ssid == BROWSER_SESSION:
+            label = platform_label(platform_of(credentials))
+            return {"ok": False, "message": f"Place this trade in the {label} window"}
         if not ssid:
             return {"ok": False, "message": "Sign in through the Pocket Option window first"}
         try:
@@ -307,16 +320,31 @@ def _side_state(credentials: dict, mode: str, uid: str, *, placeholder: bool = F
     ssid = _session_wire(credentials, is_demo)
     if not ssid:
         return None
-    live = read_session(ssid, is_demo, uid, _mode_url(credentials, is_demo))
-    if live and _book_matches(live, is_demo):
-        live["uid"] = str(live.get("uid") or uid)
-        return live
+    if is_pocket_live(credentials):
+        live = read_session(ssid, is_demo, uid, _mode_url(credentials, is_demo))
+        if live and _book_matches(live, is_demo):
+            live["uid"] = str(live.get("uid") or uid)
+            return live
     saved = _saved_balance(credentials, mode)
     if saved:
         saved["uid"] = uid
         return saved
     if placeholder:
         return {"balance": "0.00", "currency": str(credentials.get(f"{mode}_currency") or "USD"), "uid": uid, "deals": []}
+    return None
+
+
+def _saved_book(credentials: dict) -> dict | None:
+    uid = str(credentials.get("uid") or "")
+    has_real = bool(str(credentials.get("real_ssid") or credentials.get("demo_ssid") or "").strip())
+    has_demo = bool(str(credentials.get("demo_ssid") or credentials.get("real_ssid") or "").strip())
+    preferred = _active_mode(credentials, has_real, has_demo)
+    saved = _saved_balance(credentials, preferred)
+    if saved:
+        saved["uid"] = uid
+        return saved
+    if credentials.get("session_ok") or _session_wire(credentials, preferred == "demo"):
+        return {"balance": "0.00", "currency": str(credentials.get(f"{preferred}_currency") or "USD"), "uid": uid, "deals": []}
     return None
 
 
@@ -558,6 +586,7 @@ async def _read_one(url: str, ssid: str) -> dict | None:
     authenticated = False
     found: dict | None = None
     deals: list[dict] = []
+    asked = False
     try:
         async with websockets.connect(url, additional_headers=_HEADERS, open_timeout=8, close_timeout=2, ping_interval=None, max_size=8_000_000) as socket:
             opening = await asyncio.wait_for(socket.recv(), 8)
@@ -572,10 +601,7 @@ async def _read_one(url: str, ssid: str) -> dict | None:
             if not str(namespace).startswith("40"):
                 return None
             await socket.send(ssid)
-            await socket.send('42["ps"]')
-            await socket.send('42["getBalance"]')
-            deadline = time.monotonic() + 8
-            asked = True
+            deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
                 remaining = max(0.1, deadline - time.monotonic())
                 try:
@@ -588,6 +614,9 @@ async def _read_one(url: str, ssid: str) -> dict | None:
                 text, blob = _decode_message(message)
                 if text == "41" or (text and "NotAuthorized" in text):
                     return None
+                event_name = ""
+                event_body: object = None
+                money = None
                 if text and text.startswith("451-"):
                     try:
                         pending = json.loads(text.split("-", 1)[1])
@@ -595,36 +624,30 @@ async def _read_one(url: str, ssid: str) -> dict | None:
                         pending = None
                     continue
                 if blob is not None:
-                    money = parse_session_payload(blob)
-                    if money:
-                        found = {**(found or {}), **money}
-                    event_name = ""
-                    event_body: object = blob
                     if pending and isinstance(pending, list) and pending:
                         event_name = str(pending[0] or "")
+                        event_body = blob
                         pending = None
                     elif isinstance(blob, list) and blob:
                         event_name = str(blob[0] or "")
                         event_body = blob[1] if len(blob) > 1 else blob
-                    if event_name in {"successauth", "authenticated"}:
-                        authenticated = True
-                    if event_name in _DEAL_EVENTS or (isinstance(event_body, dict) and "deals" in event_body):
-                        _collect_deals(event_body, deals)
-                    elif isinstance(blob, dict):
-                        _collect_deals(blob, deals)
-                    continue
-                if text and text.startswith("42"):
+                    else:
+                        event_body = blob
+                    money = parse_session_payload(event_body) or parse_session_payload(blob)
+                elif text and text.startswith("42"):
                     parsed = _frame(text)
                     if parsed is None:
                         continue
-                    name, data = parsed
-                    if name in {"successauth", "authenticated"}:
-                        authenticated = True
-                    money = parse_session_payload(data) if isinstance(data, dict) else None
-                    if money:
-                        found = {**(found or {}), **money}
-                    if name in _DEAL_EVENTS:
-                        _collect_deals(data, deals)
+                    event_name, event_body = parsed
+                    money = parse_session_payload(event_body) if isinstance(event_body, dict) else None
+                if event_name in {"successauth", "authenticated"}:
+                    authenticated = True
+                if authenticated and money:
+                    found = {**(found or {}), **money}
+                if event_name in _DEAL_EVENTS or (isinstance(event_body, dict) and "deals" in event_body):
+                    _collect_deals(event_body, deals)
+                elif isinstance(blob, dict):
+                    _collect_deals(blob, deals)
                 if authenticated and not asked:
                     await socket.send('42["ps"]')
                     await socket.send('42["getBalance"]')

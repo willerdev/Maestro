@@ -1,4 +1,20 @@
+from app.services.account_service import account_visibility
 from app.services.system_config_service import merge_account_types
+
+
+def test_traders_do_not_see_org_webhook_accounts():
+    trader = account_visibility(["TRADER"])
+    assert trader["org_wide"] is False
+    assert trader["webhook"] is False
+    risk = account_visibility(["RISK_MANAGER"])
+    assert risk["org_wide"] is True
+    assert risk["webhook"] is False
+    owner = account_visibility(["SUPER_ADMIN"])
+    assert owner["org_wide"] is True
+    assert owner["webhook"] is True
+    desk = account_visibility(["ADMIN"])
+    assert desk["org_wide"] is True
+    assert desk["webhook"] is True
 
 
 def test_account_types_default_all_on():
@@ -23,6 +39,8 @@ def test_passprop_limit_is_ten():
     from app.services.account_service import _method_limit
 
     assert _method_limit("passprop") == 10
+    assert _method_limit("pocketoption") == 5
+    assert _method_limit("mining") == 20
     assert _method_limit("metaapi") == 1
 
 

@@ -1,10 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { BusyRoot } from "@/components/BusyRoot";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Maestro",
   description: "Multi-account MT5 risk desk",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

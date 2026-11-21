@@ -31,7 +31,7 @@ export default function PassPropsListPage() {
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <PageTitle title="Pass Props" detail="Prop firm accounts connected through MetaAPI. Open one to see P&L, drawdown, profit vs size, and the journal." />
+        <PageTitle title="Pass Props" detail="$100 USDT TRC20 for any size. If a challenge is breached, that $100 is returned to the wallet." />
         <Link href="/accounts/new" className="primary inline-block px-3 py-2 rounded bg-accent text-[var(--on-accent)] font-semibold text-sm">Add Pass Props</Link>
       </div>
       {error ? <p className="text-loss">{error}</p> : null}

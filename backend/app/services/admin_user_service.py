@@ -4,15 +4,18 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.domain.audit import write_audit
+from app.domain.rbac import ROLE_PERMISSIONS
 from app.models.chain_entities import ContractStake
-from app.models.entities import AccountGrant, AssetTransfer, Organization, Session as AuthSession, User
-from app.services.asset_service import AssetError, _available, _coin, _crypto, _payload
+from app.models.entities import AccountGrant, AssetTransfer, Organization, Role, Session as AuthSession, User, UserRole
+from app.services.asset_service import AssetError, credit_purpose, _available, _coin, _crypto, _payload
 from app.services.auth_service import password_is_strong, role_codes_for
+
+ASSIGNABLE_ROLES = tuple(code for code in ROLE_PERMISSIONS if code not in {"SUPER_ADMIN", "APPLICANT"})
 
 
 class AdminUserError(Exception):
@@ -87,11 +90,69 @@ def set_user_banned(db: Session, actor: User, roles: list[str], user_id: UUID, b
     return _card(db, target)
 
 
-def allocate_wallet(db: Session, actor: User, roles: list[str], user_id: UUID, amount: Decimal, currency: str, ip: str) -> dict:
+def set_user_role(db: Session, actor: User, roles: list[str], user_id: UUID, role_code: str, ip: str) -> dict:
+    chosen = str(role_code or "").strip()
+    if chosen == "SUPER_ADMIN":
+        raise AdminUserError(403, "That role cannot be assigned")
+    if chosen not in ASSIGNABLE_ROLES:
+        raise AdminUserError(400, "Choose a role")
+    target = _managed_user(db, actor, roles, user_id)
+    current = role_codes_for(db, target.id)
+    if current == [chosen]:
+        return _card(db, target)
+    if "SUPER_ADMIN" in current:
+        if "SUPER_ADMIN" not in roles:
+            raise AdminUserError(403, "That login cannot be changed from here")
+        if _owner_count(db) <= 1:
+            raise AdminUserError(400, "The last owner login cannot be changed")
+    role = db.scalar(select(Role).where(Role.code == chosen))
+    if role is None:
+        raise AdminUserError(400, "Choose a role")
+    db.execute(delete(UserRole).where(UserRole.user_id == target.id))
+    db.flush()
+    db.add(UserRole(user_id=target.id, role_id=role.id))
+    db.flush()
+    _revoke_sessions(db, target.id)
+    write_audit(
+        db,
+        organization_id=target.organization_id,
+        actor_user_id=actor.id,
+        action="user_role_changed",
+        entity_type="user",
+        entity_id=str(target.id),
+        after={"email": target.email, "role": chosen},
+        ip_address=ip,
+    )
+    return _card(db, target)
+
+
+def _owner_count(db: Session) -> int:
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(UserRole)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(Role.code == "SUPER_ADMIN")
+        )
+        or 0
+    )
+
+
+def allocate_wallet(
+    db: Session,
+    actor: User,
+    roles: list[str],
+    user_id: UUID,
+    amount: Decimal,
+    currency: str,
+    ip: str,
+    purpose: str = "earnings",
+) -> dict:
     target = _managed_user(db, actor, roles, user_id)
     coin = _coin(currency or "usdttrc20")
     try:
         cash = _crypto(amount)
+        reason, label = credit_purpose(purpose)
     except AssetError as exc:
         raise AdminUserError(exc.status, exc.detail) from exc
     transfer = AssetTransfer(
@@ -101,7 +162,8 @@ def allocate_wallet(db: Session, actor: User, roles: list[str], user_id: UUID, a
         direction="deposit",
         amount=cash,
         status="posted",
-        note="Wallet credit",
+        provider_id=reason,
+        note=label,
         order_id=f"AD{uuid4().hex[:16]}",
     )
     db.add(transfer)
@@ -113,7 +175,7 @@ def allocate_wallet(db: Session, actor: User, roles: list[str], user_id: UUID, a
         action="admin_wallet_allocated",
         entity_type="user",
         entity_id=str(target.id),
-        after={"email": target.email, "amount": format(cash, "f"), "currency": coin},
+        after={"email": target.email, "amount": format(cash, "f"), "currency": coin, "purpose": reason},
         ip_address=ip,
     )
     return {"transfer": _payload(transfer), "user": _card(db, target)}

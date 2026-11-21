@@ -146,19 +146,25 @@ def test_active_mode_reads_the_demo_book(monkeypatch):
     assert inspected["account"]["balance"] == "11.00"
 
 
-def test_complete_auth_wire_is_sent_as_is():
+def test_complete_auth_wire_includes_fast_history():
     wire = '42["auth",{"session":"abc12345678","isDemo":0,"uid":1,"platform":1}]'
-    assert format_ssid(wire, False, "1") == wire
-    built = format_ssid("n1p5ah5u8t9438rbunpgrq0hlq", True, "42")
+    built = format_ssid(wire, False, "1")
     assert built.startswith('42["auth",')
-    assert '"isDemo":1' in built
-    assert '"session":"n1p5ah5u8t9438rbunpgrq0hlq"' in built
+    assert '"isDemo":0' in built
+    assert '"isFastHistory":true' in built
+    assert '"session":"abc12345678"' in built
+    rebuilt = format_ssid("n1p5ah5u8t9438rbunpgrq0hlq", True, "42")
+    assert rebuilt.startswith('42["auth",')
+    assert '"isDemo":1' in rebuilt
+    assert '"isFastHistory":true' in rebuilt
+    assert '"session":"n1p5ah5u8t9438rbunpgrq0hlq"' in rebuilt
 
 
 def test_format_ssid_flips_demo_flag_on_a_real_wire():
     wire = '42["auth",{"session":"abc12345678","isDemo":0,"uid":1,"platform":2}]'
     flipped = format_ssid(wire, True, "1")
     assert '"isDemo":1' in flipped
+    assert '"isFastHistory":true' in flipped
     assert '"session":"abc12345678"' in flipped
     assert '"platform":2' in flipped
 
@@ -217,6 +223,38 @@ def test_login_keeps_the_chosen_book_as_active_mode():
     assert snap["demo"]["balance"] == "—"
     assert "Real 0.80" not in snap["detail"]
     assert "Demo" in snap["detail"] or "demo" in snap["detail"].lower()
+
+
+def test_demo_login_steers_to_the_demo_cabinet():
+    from app.services.pocket_browser import PocketLogin
+
+    session = PocketLogin("abc", "user-1", "demo")
+    assert session._cabinet_url().endswith("/cabinet/demo-quick-high-low/")
+    session.uid = "91974731"
+    session.real_ssid = '42["auth",{"session":"tokentoken12","isDemo":0,"uid":91974731}]'
+    assert session._should_steer() is True
+    session.demo_ssid = '42["auth",{"session":"tokentoken12","isDemo":1,"uid":91974731}]'
+    assert session._should_steer() is False
+
+
+def test_untagged_real_balance_is_not_stored_as_demo():
+    from app.services.pocket_browser import PocketLogin
+
+    session = PocketLogin("abc", "user-1", "demo")
+    session._note('{"balance":0.80,"uid":1,"currency":"USD"}')
+    session._note('42["successauth",{"id":1,"isDemo":1}]')
+    assert session.demo_balance == ""
+    session._note('42["updateBalance",{"balance":10000,"currency":"USD","isDemo":1}]')
+    assert session.demo_balance == "10000.00"
+
+
+def test_successauth_balance_follows_the_auth_book():
+    from app.services.pocket_browser import PocketLogin
+
+    session = PocketLogin("abc", "user-1", "demo")
+    session._note('42["successauth",{"id":1,"isDemo":1,"balance":50000,"currency":"USD"}]')
+    assert session.demo_balance == "50000.00"
+    assert session.real_balance == ""
 
 
 def test_demo_snapshot_does_not_promote_a_real_balance(monkeypatch):

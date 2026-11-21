@@ -25,7 +25,7 @@ const METHOD_LABEL: Record<string, string> = {
   metaapi: "MetaAPI",
   local_mt5: "MetaTrader",
   passprop: "Pass Props",
-  pocketoption: "Pocket Option",
+  pocketoption: "Options Trading",
   blockchain: "Contracts",
   mining: "Project Coin",
   webhook: "Webhook",
@@ -66,7 +66,7 @@ export default function AccountsPage() {
   return (
     <div>
       <div className="flex items-center justify-between">
-        <PageTitle title="Accounts" detail="One account of each type. MetaTrader allows up to 10. Delete one to free that slot." />
+        <PageTitle title="Accounts" detail="Project Coin allows up to 20. MetaTrader and Pass Props allow up to 10. Options Trading allows up to 5 platforms. Other types allow one." />
         {system?.can_add === false ? <p className="text-sm text-muted">{Object.values(system.enabled || {}).some(Boolean) ? "Every account type is full." : "No account type is enabled yet."}</p> : <Link href="/accounts/new" className="primary inline-block px-3 py-2 rounded bg-accent text-[var(--on-accent)] font-semibold text-sm">Add account</Link>}
       </div>
       {error ? <p className="text-loss">{error}</p> : null}

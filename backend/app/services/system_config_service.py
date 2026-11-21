@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.encryption import decrypt_json, encrypt_json
+from cryptography.exceptions import InvalidTag
+
+from app.core.encryption import EncryptionError, decrypt_json, encrypt_json
 from app.domain.audit import write_audit
 from app.models.entities import SystemConfig, User
 from app.services.alert_service import telegram_settings
@@ -18,7 +20,7 @@ ACCOUNT_TYPES = (
     ("metaapi", "MetaAPI"),
     ("local_mt5", "MetaTrader 5"),
     ("passprop", "Pass Props"),
-    ("pocketoption", "Pocket Option"),
+    ("pocketoption", "Options Trading"),
     ("blockchain", "Blockchain contracts"),
     ("mining", "Project Coin"),
     ("webhook", "Webhook"),
@@ -48,7 +50,7 @@ def account_types_payload(db: Session, organization_id: UUID) -> dict:
     flags = account_type_flags(db, organization_id)
     return {
         "types": [
-            {"code": code, "label": label, "enabled": flags[code], "limit": 10 if code in {"local_mt5", "passprop"} else 1}
+            {"code": code, "label": label, "enabled": flags[code], "limit": 20 if code == "mining" else 10 if code in {"local_mt5", "passprop"} else 5 if code == "pocketoption" else 1}
             for code, label in ACCOUNT_TYPES
         ]
     }
@@ -188,7 +190,10 @@ def _read(db: Session, organization_id: UUID) -> dict:
     row = db.scalar(select(SystemConfig).where(SystemConfig.organization_id == organization_id))
     if row is None or not row.secret_ciphertext:
         return {}
-    data = decrypt_json(row.secret_nonce, row.secret_ciphertext)
+    try:
+        data = decrypt_json(row.secret_nonce, row.secret_ciphertext)
+    except (InvalidTag, EncryptionError):
+        return {}
     return data if isinstance(data, dict) else {}
 
 

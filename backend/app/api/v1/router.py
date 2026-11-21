@@ -271,7 +271,8 @@ def _user_payload(user: User, roles: list[str]) -> dict:
 
 def _account_payload(db: Session, account) -> dict:
     state = db.get(AccountState, account.id)
-    return {
+    pocket = pocket_public(db, account)
+    payload = {
         "id": str(account.id),
         "display_name": account.display_name,
         "broker": account.broker,
@@ -297,8 +298,19 @@ def _account_payload(db: Session, account) -> dict:
         "today_pl": _plain(daily_pnl(state.day_start_equity, state.equity), 2) if state else "0.00",
         "current_drawdown": _plain(current_drawdown_pct(state.peak_equity, state.equity), 2) if state else "0.00",
         "passprop": passprop_public(db, account),
-        "pocket": pocket_public(db, account),
+        "pocket": pocket,
     }
+    if pocket:
+        saved = pocket.get("demo_balance") if pocket.get("mode") == "demo" else pocket.get("real_balance")
+        if saved:
+            payload["balance"] = saved
+            payload["equity"] = saved
+            payload["free_margin"] = saved
+        elif pocket.get("mode") == "demo":
+            payload["balance"] = "—"
+            payload["equity"] = "—"
+            payload["free_margin"] = "—"
+    return payload
 
 
 @router.get("/health")
@@ -432,10 +444,10 @@ def add_user(payload: MemberIn, request: Request, principal: Principal = Depends
 
 
 @router.get("/operating-status")
-def operating_status_route(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def operating_status_route(request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     from app.services.expense_service import operating_status
 
-    body = operating_status(db, principal.user, principal.roles)
+    body = operating_status(db, principal.user, principal.roles, request.headers.get("x-device-id", ""))
     db.commit()
     return body
 
@@ -464,7 +476,7 @@ class AccountTypesIn(BaseModel):
 @router.get("/system")
 def system_info(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     principal.require("accounts.read")
-    return system_overview(db, principal.user)
+    return system_overview(db, principal.user, principal.roles)
 
 
 @router.get("/system/connectors")
@@ -524,7 +536,7 @@ def probe_terminal(payload: ProbeIn, principal: Principal = Depends(get_principa
     if auth_limiter.hit(f"probe:{principal.user.id}", limit=30, window_seconds=60):
         raise HTTPException(429, "Too many connection checks")
     if payload.connection_method not in {"metaapi", "local_mt5", "passprop", "pocketoption", "blockchain", "mining"}:
-        raise HTTPException(400, "Choose MetaAPI, MetaTrader 5, Pass Props, Pocket Option, contracts, or mining")
+        raise HTTPException(400, "Choose MetaAPI, MetaTrader 5, Pass Props, Options Trading, contracts, or mining")
     from app.services.system_config_service import method_is_open, metaapi_token
     from app.services.connection_probe import uses_metaapi
 
@@ -567,12 +579,18 @@ def remove_account(account_id: UUID, request: Request, principal: Principal = De
 @router.get("/accounts/{account_id}")
 def get_account(
     account_id: UUID,
+    request: Request,
     sync: bool = Query(False),
     principal: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ):
     principal.require("accounts.read")
     account = _account_or_404(db, principal, account_id)
+    if account.connection_method == "passprop":
+        from app.services.passprop_service import maybe_refund_breach
+
+        maybe_refund_breach(db, principal.user, account, _client_ip(request))
+        db.commit()
     sync_error = ""
     if sync and account.status not in {"disconnected", "deleted"} and account.connection_method in {"metaapi", "passprop", "local_mt5"} and get_settings().environment == "test":
         from app.services.live_trades import refresh_terminal
@@ -626,6 +644,20 @@ def patch_account(account_id: UUID, payload: AccountPatch, request: Request, pri
     account = _account_or_404(db, principal, account_id)
     update_account(db, principal.user, account, payload.model_dump(exclude_none=True), _client_ip(request))
     db.commit()
+    return _account_payload(db, account)
+
+
+@router.post("/accounts/{account_id}/passprop/breach")
+def post_passprop_breach(account_id: UUID, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("accounts.write")
+    account = _account_or_404(db, principal, account_id)
+    from app.services.passprop_service import maybe_refund_breach
+
+    try:
+        maybe_refund_breach(db, principal.user, account, _client_ip(request), force=True)
+        db.commit()
+    except AccountError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
     return _account_payload(db, account)
 
 

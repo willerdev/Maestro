@@ -2,7 +2,13 @@ import { beginRequest } from "@/lib/busy";
 
 function apiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-  if (typeof window !== "undefined") return `${window.location.protocol}//${window.location.hostname}:8000`;
+  if (typeof window !== "undefined") {
+    const { protocol, hostname, port } = window.location;
+    if (port === "3000") {
+      return `${protocol}//${hostname}:8000`;
+    }
+    return window.location.origin;
+  }
   return "http://127.0.0.1:8000";
 }
 
@@ -23,6 +29,21 @@ export function isSystemAdmin(roles?: string[]) {
 function accessToken(): string | null {
   if (typeof window === "undefined") return null;
   return sessionStorage.getItem("tg_access");
+}
+
+export function deviceId(): string {
+  if (typeof window === "undefined") return "";
+  const key = "tg_device";
+  try {
+    let id = window.localStorage.getItem(key);
+    if (!id) {
+      id = window.crypto?.randomUUID?.() || `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+      window.localStorage.setItem(key, id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
 }
 
 export function saveSession(token: string) {
@@ -60,6 +81,8 @@ export async function api(path: string, options: RequestInit = {}, retry = true)
   const headers = new Headers(options.headers);
   headers.set("X-Tradeguard-Request", "1");
   headers.set("Cache-Control", "no-store");
+  const device = deviceId();
+  if (device) headers.set("X-Device-Id", device);
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const token = accessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);

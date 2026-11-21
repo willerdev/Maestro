@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { apiJson } from "@/lib/api";
-import { AuthCard } from "../login/page";
+import { AuthCard } from "@/components/AuthCard";
 
 export default function AccountRecoveryPage() {
   const [error, setError] = useState("");

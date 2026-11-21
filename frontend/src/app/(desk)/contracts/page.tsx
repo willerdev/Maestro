@@ -130,7 +130,7 @@ export default function ContractsPage() {
 
   return (
     <div className="max-w-5xl">
-      <PageTitle title="Contracts" detail={`Transfer USDT before a contract runs. Daily yield ${desk?.rate_range || "2.00% to 2.98%"}. Funds stay on the contract for 7 days. Cancel forfeits yield; after 7 days you can withdraw the initial balance.`} />
+      <PageTitle title="Contracts" detail="Transfer USDT before a contract runs. Working day profit is added on business days. Funds stay on the contract for 7 days. Cancel forfeits that profit; after 7 days you can withdraw the initial balance." />
       {accepted ? <p className="text-sm text-profit mb-3">Terms accepted. Blockchain contracts is on the running account list.</p> : null}
       {error ? <p className="text-loss mb-3">{error}</p> : null}
       {detail ? <p className="text-sm text-profit mb-3">{detail}</p> : null}
@@ -142,8 +142,8 @@ export default function ContractsPage() {
             <li>The public wallet that holds the contract balance.</li>
             <li>The contract address.</li>
             <li>Minimum transfer {desk?.min_deposit || "2000"} USDT from the default wallet.</li>
-            <li>Daily yield {desk?.rate_range || "2.00% to 2.98%"} only after the transfer is on the contract.</li>
-            <li>Funds stay on the contract for 7 days. Cancel drops the yield. After 7 days you can withdraw the initial balance.</li>
+            <li>Working day profit is added only after the transfer is on the contract.</li>
+            <li>Funds stay on the contract for 7 days. Cancel drops the profit. After 7 days you can withdraw the initial balance.</li>
           </ul>
           <p className="text-sm text-muted mt-3">A private key or seed phrase is not required to fund a contract. Convert mined PCoin to USDT TRC20 on the default wallet first if the wallet is empty.</p>
         </section>
@@ -152,7 +152,7 @@ export default function ContractsPage() {
           <ul className="text-sm text-muted list-disc pl-5">
             <li>Read a public wallet and one contract.</li>
             <li>Transfer default-wallet USDT onto the contract. The funds go on hold.</li>
-            <li>Credit {desk?.daily_rate || "2.00%"} each UTC day only after money is transferred.</li>
+            <li>Working day profit is credited on business days after money is transferred.</li>
             <li>After 7 days, withdraw. A cancel keeps only the original amount.</li>
           </ul>
           <p className="text-sm mt-3">Default wallet USDT TRC20 available: <span className="num">{desk?.wallet_usdt || "0"}</span></p>
@@ -190,7 +190,7 @@ export default function ContractsPage() {
           <tr>
             <th className="px-3 py-2">Contract</th>
             <th>Principal</th>
-            <th>Yield</th>
+            <th>Working day profit</th>
             <th>Held</th>
             <th>Status</th>
             <th></th>

@@ -37,6 +37,8 @@ export default function SetupPage() {
   const [dial, setDial] = useState("");
   const [done, setDone] = useState<Done | null>(null);
   const [enabled, setEnabled] = useState<Partial<Record<ConnectionMethod, boolean>> | undefined>();
+  const [optionsUsed, setOptionsUsed] = useState<string[]>([]);
+  const [depositReady, setDepositReady] = useState(true);
 
   useEffect(() => {
     apiJson<Status>("/api/v1/setup/status")
@@ -45,8 +47,12 @@ export default function SetupPage() {
         setDial(body.phone_country_code || body.countries[0]?.dial || "");
       })
       .catch((err: Error) => setError(err.message));
-    apiJson<{ enabled: Partial<Record<ConnectionMethod, boolean>> }>("/api/v1/system")
-      .then((info) => setEnabled(info.enabled || {}))
+    apiJson<{ enabled: Partial<Record<ConnectionMethod, boolean>>; options_used?: string[]; deposit_ready?: boolean }>("/api/v1/system")
+      .then((info) => {
+        setEnabled(info.enabled || {});
+        setOptionsUsed(info.options_used || []);
+        setDepositReady(info.deposit_ready !== false);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -163,6 +169,8 @@ export default function SetupPage() {
           metaApiOptional
           gateTerms
           enabled={enabled}
+          optionsUsed={optionsUsed}
+          depositReady={depositReady}
         />
         <button className="primary" type="submit" disabled={method !== "blockchain" && method !== "mining" && method !== "metaapi" && !probe?.ok}>Save setup</button>
       </form>

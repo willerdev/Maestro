@@ -13,9 +13,13 @@ The backend container runs `alembic upgrade head` before Uvicorn. The worker con
 
 ## Production
 
+The portable stack is `scripts/run-production.sh`. It builds Docker images, starts Postgres, Redis, the API, the worker, the desk, and Caddy on one port. See `docs/run-production.md`.
+
+If you assemble the process yourself instead of using that script:
+
 1. Set `ENVIRONMENT=production`.
-2. Replace `JWT_SECRET`, `MASTER_KEY`, and `SEED_ADMIN_PASSWORD`. The process refuses the documented local master key and the local admin password.
-3. Set `COOKIE_SECURE=true` and `CORS_ORIGINS` to the desk origin.
+2. Replace `JWT_SECRET`, `MASTER_KEY`, and `SEED_ADMIN_PASSWORD`. The process refuses the documented local master key and the local owner password.
+3. Set `COOKIE_SECURE=true` and `CORS_ORIGINS` to the desk origin when TLS is on.
 4. Terminate TLS in front of the API and the desk. Caddy or another reverse proxy is enough on a Linux VPS.
 5. Keep Postgres volumes and take a daily base backup plus WAL archiving. Restore it once before calling the deploy finished.
 6. Set `SEED_SAMPLE_DATA=false`.

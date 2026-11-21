@@ -15,6 +15,8 @@ type Transfer = {
   address: string;
   invoice_url: string;
   note: string;
+  purpose?: string;
+  purpose_label?: string;
   created_at: string;
 };
 type Home = { configured: boolean; provider: string; balances: Balance[]; transfers: Transfer[] };
@@ -31,11 +33,13 @@ function when(value: string) {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function directionLabel(direction: string) {
-  if (direction === "expense") return "Expense";
-  if (direction === "withdraw") return "Withdraw";
-  if (direction === "contract") return "Contract";
-  if (direction === "mining_upgrade") return "Mining upgrade";
+function directionLabel(row: Transfer) {
+  if (row.purpose_label) return row.purpose_label;
+  if (row.note === "Wallet credit") return "Earnings";
+  if (row.direction === "expense") return "Expense";
+  if (row.direction === "withdraw") return "Withdraw";
+  if (row.direction === "contract") return "Contract";
+  if (row.direction === "mining_upgrade") return "Mining upgrade";
   return "Deposit";
 }
 
@@ -229,8 +233,8 @@ export default function WalletPage() {
                 <article key={row.id} className="wallet-row" style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}>
                   <div className={`wallet-mark ${incoming ? "in" : "out"}`} aria-hidden="true">{incoming ? "↓" : "↑"}</div>
                   <div>
-                    <p>{directionLabel(row.direction)} <span className="num">{row.amount} {coinLabel(row.currency)}</span></p>
-                    <p className="meta num">{row.address || when(row.created_at)}{row.note ? ` · ${row.note}` : ""}</p>
+                    <p>{directionLabel(row)} <span className="num">{row.amount} {coinLabel(row.currency)}</span></p>
+                    <p className="meta num">{row.address || when(row.created_at)}{row.note && row.note !== directionLabel(row) ? ` · ${row.note}` : ""}</p>
                   </div>
                   <div className="text-right">
                     <span className={`pill ${tone(row.status)}`}>{statusLabel(row.status)}</span>

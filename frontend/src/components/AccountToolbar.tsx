@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 
 export type PocketInfo = {
   mode: "demo" | "real" | string;
+  platform?: string;
+  platform_label?: string;
   has_demo: boolean;
   has_real: boolean;
   demo_balance?: string | null;
@@ -53,8 +55,7 @@ function Tool({
     label === "Disconnect" ? "unplug" :
     label === "Test connection" ? "refresh" :
     label === "Watch" ? "eye" :
-    label === "Pause watch" ? "eyeOff" :
-    label === "Risk rules" ? "shield" : "trash"
+    label === "Pause watch" ? "eyeOff" : "trash"
   ) as "plug" | "unplug" | "refresh" | "eye" | "eyeOff" | "shield" | "trash";
   const className = `icon-btn ${kind} ${active ? "on" : ""}`.trim();
   if (href) {
@@ -152,7 +153,6 @@ export function AccountToolbar({
           active={monitoring}
           onClick={() => onAct(`/api/v1/accounts/${accountId}/monitoring`, { enabled: !monitoring })}
         />
-        <Tool label="Risk rules" href={`/accounts/${accountId}/rules`} />
         <Tool label="Delete" kind="danger" onClick={onDelete} />
       </div>
     </div>

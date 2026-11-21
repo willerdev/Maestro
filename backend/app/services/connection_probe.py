@@ -59,7 +59,7 @@ def probe_connection(method: str, credentials: dict | None, *, metaapi_token: st
         "ok": False,
         "status": "unsupported",
         "error_code": "unsupported_method",
-        "detail": "Choose MetaAPI, MetaTrader 5, Pass Props, Pocket Option, contracts, or mining",
+        "detail": "Choose MetaAPI, MetaTrader 5, Pass Props, Options Trading, contracts, or mining",
         "region": "",
         "account": None,
     }

@@ -8,7 +8,7 @@ from app.services.expense_service import FEE, MAX_CHARGE, MIN_CHARGE, hours_left
 from app.services.asset_service import _available
 
 
-def test_hourly_plan_consumes_seven_hundred():
+def test_hourly_plan_consumes_five_hundred():
     random.seed(11)
     remaining = FEE
     hours = 5 * 24
@@ -31,7 +31,7 @@ def test_hourly_plan_consumes_seven_hundred():
 def test_charge_stays_inside_two_to_sixty_eight():
     random.seed(3)
     for hours in (120, 40, 8, 2):
-        cash = next_expense_amount(Decimal("700"), hours)
+        cash = next_expense_amount(FEE, hours)
         assert MIN_CHARGE <= cash <= MAX_CHARGE
 
 
@@ -49,10 +49,10 @@ def test_posted_expense_reduces_available():
     user = SimpleNamespace(id=uuid4(), organization_id=uuid4())
     db = MagicMock()
     db.scalars.return_value.all.return_value = [
-        SimpleNamespace(direction="deposit", status="posted", amount=Decimal("700")),
+        SimpleNamespace(direction="deposit", status="posted", amount=Decimal("500")),
         SimpleNamespace(direction="expense", status="posted", amount=Decimal("12.50")),
     ]
-    assert _available(db, user, "usdttrc20") == Decimal("687.50")
+    assert _available(db, user, "usdttrc20") == Decimal("487.50")
 
 
 def test_hours_left_never_drops_below_one():

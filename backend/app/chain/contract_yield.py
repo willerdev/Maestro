@@ -22,6 +22,18 @@ def daily_yield(held: Decimal, rate_bps: int) -> Decimal:
     return (held * Decimal(points) / Decimal(10_000)).quantize(_SCALE, rounding=ROUND_DOWN)
 
 
+def working_day_profit(day, low: Decimal, high: Decimal) -> Decimal:
+    if day.weekday() >= 5:
+        return Decimal("0")
+    low_cents = int((Decimal(low) * 100).to_integral_value(rounding=ROUND_DOWN))
+    high_cents = int((Decimal(high) * 100).to_integral_value(rounding=ROUND_DOWN))
+    if high_cents < low_cents:
+        low_cents, high_cents = high_cents, low_cents
+    span = high_cents - low_cents
+    pick = low_cents if span == 0 else low_cents + (int(day.strftime("%Y%m%d")) % (span + 1))
+    return (Decimal(pick) / Decimal(100)).quantize(_SCALE, rounding=ROUND_DOWN)
+
+
 def rate_label(rate_bps: int) -> str:
     points = clamp_rate_bps(rate_bps)
     return f"{points / 100:.2f}%"

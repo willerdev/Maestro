@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
+from cryptography.exceptions import InvalidTag
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.encryption import decrypt_json, encrypt_json
+from app.core.encryption import EncryptionError, decrypt_json, encrypt_json
 from app.core.totp import generate_secret, otpauth_uri, verify_totp
 from app.domain.audit import write_audit
 from app.models.entities import Account, MfaFactor, Organization, User
@@ -88,18 +89,27 @@ def ensure_pending_totp(db: Session, user: User) -> str:
     if row and row.enabled:
         return ""
     if row and row.secret_ciphertext:
-        return _secret(row)
+        try:
+            return _secret(row)
+        except (InvalidTag, EncryptionError):
+            row.secret_nonce = None
+            row.secret_ciphertext = None
     secret = generate_secret()
     nonce, ciphertext = encrypt_json({"secret": secret})
-    db.add(
-        MfaFactor(
-            user_id=user.id,
-            factor_type="totp",
-            secret_nonce=nonce,
-            secret_ciphertext=ciphertext,
-            enabled=False,
+    if row is None:
+        db.add(
+            MfaFactor(
+                user_id=user.id,
+                factor_type="totp",
+                secret_nonce=nonce,
+                secret_ciphertext=ciphertext,
+                enabled=False,
+            )
         )
-    )
+    else:
+        row.secret_nonce = nonce
+        row.secret_ciphertext = ciphertext
+        row.enabled = False
     db.flush()
     return secret
 
@@ -262,10 +272,10 @@ def _optional_account(db: Session, user: User, roles: list[str], account_in: dic
         return None, None, ""
     method = str(account_in.get("connection_method") or "")
     if method not in {"metaapi", "local_mt5", "passprop", "pocketoption", "blockchain", "mining"}:
-        raise SetupError(400, "Choose MetaAPI, MetaTrader 5, Pass Props, Pocket Option, contracts, or mining")
+        raise SetupError(400, "Choose MetaAPI, MetaTrader 5, Pass Props, Options Trading, contracts, or mining")
     credentials = dict(account_in.get("credentials") or {})
     if method == "pocketoption" and not str(credentials.get("pocket_session_id") or "").strip():
-        raise SetupError(400, "Open the Pocket Option window and sign in")
+        raise SetupError(400, "Open the options window and sign in")
     if method == "blockchain" and not str(credentials.get("contract_address") or "").strip():
         raise SetupError(400, "A contract address is required")
     if method == "mining" and not str(credentials.get("mining_address") or "").strip():

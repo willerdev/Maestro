@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { apiJson, saveSession } from "@/lib/api";
-import { AuthCard } from "../login/page";
+import { AuthCard } from "@/components/AuthCard";
 
 export default function RegisterPage() {
   const router = useRouter();

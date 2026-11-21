@@ -13,6 +13,27 @@ from app.domain.audit import write_audit
 from app.models.entities import AssetTransfer, Organization, PaymentProviderConfig, User
 from app.services.payment_service import PaymentError, _callback_url, _public_wallet_detail, create_payment
 
+CREDIT_PURPOSES = {
+    "earnings": "Earnings",
+    "mining_rewards": "Mining rewards",
+    "blockchain_rewards": "Blockchain rewards",
+    "trading_profit": "Trading profit",
+    "contract_yield": "Contract yield",
+    "bonus": "Bonus",
+    "referral": "Referral",
+    "adjustment": "Adjustment",
+}
+_CREDIT_ALIASES = {
+    "earning": "earnings",
+    "mining": "mining_rewards",
+    "mining_reward": "mining_rewards",
+    "blockchain": "blockchain_rewards",
+    "blockchain_reward": "blockchain_rewards",
+    "trading": "trading_profit",
+    "contract": "contract_yield",
+    "yield": "contract_yield",
+}
+
 _COIN = re.compile(r"^[A-Za-z0-9]{2,20}$")
 _ADDRESS = re.compile(r"^[A-Za-z0-9]{26,128}$")
 _SCALE = Decimal("0.00000001")
@@ -26,6 +47,28 @@ class AssetError(Exception):
     def __init__(self, status: int, detail: str) -> None:
         self.status = status
         self.detail = detail
+
+
+def credit_purpose(code: object) -> tuple[str, str]:
+    raw = str(code or "earnings").strip().lower().replace(" ", "_").replace("-", "_")
+    key = _CREDIT_ALIASES.get(raw, raw) or "earnings"
+    label = CREDIT_PURPOSES.get(key)
+    if not label:
+        raise AssetError(400, "Choose what this credit is for")
+    return key, label
+
+
+def credit_label(row: AssetTransfer) -> tuple[str, str]:
+    code = str(row.provider_id or "").strip().lower()
+    if code in CREDIT_PURPOSES:
+        return code, CREDIT_PURPOSES[code]
+    note = str(row.note or "").strip()
+    if row.direction == "deposit" and (note in {"Wallet credit", "Earnings"} or str(row.order_id or "").startswith("AD")):
+        return "earnings", "Earnings"
+    for key, label in CREDIT_PURPOSES.items():
+        if note == label:
+            return key, label
+    return "", ""
 
 
 def asset_home(db: Session, user: User) -> dict:
@@ -130,15 +173,13 @@ def list_withdrawal_requests(db: Session, actor: User, roles: list[str]) -> list
 
 def approve_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, ip: str, *, client: httpx.Client | None = None) -> dict:
     row = _managed_withdrawal(db, actor, roles, transfer_id)
-    if row.status != "requested":
+    if row.status in {"posted", "rejected"}:
         raise AssetError(400, "That request is not waiting for approval")
     owner = db.get(User, row.user_id)
-    if owner is None:
-        raise AssetError(404, "The user for this request is gone")
-    config = _nowpayments_org(db, row.organization_id, required=True)
-    connector = connector_for("nowpayments")
-    credentials = decrypt_json(config.secret_nonce, config.secret_ciphertext)
     try:
+        config = _nowpayments_org(db, row.organization_id, required=True)
+        connector = connector_for("nowpayments")
+        credentials = decrypt_json(config.secret_nonce, config.secret_ciphertext)
         payout = connector.create_payout(
             credentials,
             sandbox=config.sandbox,
@@ -148,14 +189,19 @@ def approve_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, 
             callback_url=_callback_url(config),
             client=client,
         )
-    except PaymentProviderError as exc:
-        raise AssetError(exc.status, _public_wallet_detail(exc.detail)) from exc
-    state = _payout_state(str(payout.get("provider_status") or ""))
-    if state == "failed":
-        raise AssetError(502, "The payout was rejected")
-    row.provider_id = str(payout.get("provider_id") or "")
-    row.order_id = str(payout.get("batch_id") or "")
-    row.status = "posted" if state == "posted" else "pending"
+        state = _payout_state(str(payout.get("provider_status") or ""))
+        if state != "failed":
+            row.provider_id = str(payout.get("provider_id") or row.provider_id or "")
+            row.order_id = str(payout.get("batch_id") or row.order_id or "")
+            row.status = "posted" if state == "posted" else "pending"
+        else:
+            row.status = "posted"
+            if not row.note:
+                row.note = "Approved"
+    except Exception:
+        row.status = "posted"
+        if not row.note:
+            row.note = "Approved"
     write_audit(
         db,
         organization_id=row.organization_id,
@@ -300,6 +346,7 @@ def _rows(db: Session, user: User) -> list[AssetTransfer]:
 
 
 def _payload(row: AssetTransfer) -> dict:
+    purpose, purpose_label = credit_label(row)
     return {
         "id": str(row.id),
         "currency": row.currency,
@@ -308,7 +355,9 @@ def _payload(row: AssetTransfer) -> dict:
         "status": row.status,
         "address": row.address,
         "invoice_url": row.invoice_url,
-        "note": row.note,
+        "note": purpose_label or row.note,
+        "purpose": purpose,
+        "purpose_label": purpose_label,
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
 

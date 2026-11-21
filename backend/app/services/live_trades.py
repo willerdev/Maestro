@@ -139,6 +139,11 @@ def refresh_terminal(db: Session, account: Account) -> dict | None:
         return {"account_id": key, "account": account.display_name, "detail": detail}
     try:
         credentials = load_credentials(db, account.id)
+        if account.connection_method == "pocketoption":
+            from app.connectors.options_platforms import is_pocket_live
+
+            if not is_pocket_live(credentials):
+                return None
         positions = fetch(credentials)
     except Exception as exc:  # noqa: BLE001
         detail = _safe_detail(exc)

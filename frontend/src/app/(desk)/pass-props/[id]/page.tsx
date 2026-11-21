@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { PageTitle } from "@/components/Shell";
 import { apiJson } from "@/lib/api";
 
-type PassProp = { firm_name: string; firm_url: string; rules: string; account_size: string };
+type PassProp = { firm_name: string; firm_url: string; rules: string; account_size: string; fee?: string; fee_status?: string; refund_on_breach?: boolean };
 type Account = {
   id: string;
   display_name: string;
@@ -37,6 +37,7 @@ export default function PassPropPage() {
   const [error, setError] = useState("");
   const [copyNote, setCopyNote] = useState("");
   const [asOf, setAsOf] = useState<Date | null>(null);
+  const [busy, setBusy] = useState("");
 
   useEffect(() => {
     let stopped = false;
@@ -80,6 +81,21 @@ export default function PassPropPage() {
     };
   }, [params.id, router]);
 
+  async function markBreached() {
+    if (!account) return;
+    if (!window.confirm("Mark this challenge as breached and return the $100 fee to the wallet?")) return;
+    setBusy("refund");
+    setError("");
+    try {
+      const row = await apiJson<Account>(`/api/v1/accounts/${account.id}/passprop/breach`, { method: "POST" });
+      setAccount(row);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The fee could not be returned");
+    } finally {
+      setBusy("");
+    }
+  }
+
   const prop = account?.passprop;
   const size = Number(prop?.account_size);
   const equity = Number(account?.equity);
@@ -101,6 +117,16 @@ export default function PassPropPage() {
           <span className="text-muted">{asOf ? asOf.toLocaleTimeString() : ""}</span>
         </div>
       </div>
+      <p className="roi-note mb-4">$100 USDT TRC20 for any size. If this challenge is breached, that $100 is returned to the wallet.</p>
+      {prop?.fee_status === "charged" ? (
+        <p className="text-sm mb-4">
+          Challenge fee paid.{" "}
+          <button className="ghost" type="button" disabled={busy === "refund"} onClick={markBreached}>
+            {busy === "refund" ? "Returning…" : "Challenge breached · return $100"}
+          </button>
+        </p>
+      ) : null}
+      {prop?.fee_status === "refunded" ? <p className="text-sm text-profit mb-4">The $100 challenge fee was returned to the wallet after a breach.</p> : null}
       {error ? <p className="text-loss mb-3">{error}</p> : null}
       {journal?.error ? <p className="text-sm text-muted mb-3">{journal.error}</p> : null}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">

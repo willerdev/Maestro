@@ -62,6 +62,25 @@ export type HybridView = {
   rewards: { amount: string; kind: string; multiplier: string; created_at: string; note: string }[];
 };
 
+export type MiningComputer = {
+  id: string;
+  label: string;
+  this_computer: boolean;
+  status: string;
+  hashrate: number;
+  pow_mined: string;
+  premium: string;
+  earned: string;
+  last_seen: string;
+};
+
+export type MiningMinerGroup = {
+  user_id: string;
+  email: string;
+  full_name: string;
+  computers: MiningComputer[];
+};
+
 export type MiningView = {
   status: string;
   hashrate: number;
@@ -83,6 +102,8 @@ export type MiningView = {
   hashrate_samples: { t: number; hashrate: number }[];
   coin: { name: string; symbol: string; fee: string; difficulty: number; max_supply: string; initial_reward: string };
   hybrid?: HybridView;
+  this_computer?: string;
+  computers?: MiningComputer[];
 };
 
 export type Dashboard = {

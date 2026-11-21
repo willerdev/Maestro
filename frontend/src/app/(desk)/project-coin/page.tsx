@@ -3,22 +3,32 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BalanceChart, BlockChart, HashChart, RewardChart } from "@/components/project-coin/CoinCharts";
+import { ComputersPanel } from "@/components/project-coin/ComputersPanel";
 import { apiJson } from "@/lib/api";
-import { Dashboard, when } from "@/lib/coin";
+import { Dashboard, MiningMinerGroup, when } from "@/lib/coin";
 
 const RANGES = ["24h", "7d", "30d", "all"] as const;
 
 export default function ProjectCoinDashboard() {
   const [span, setSpan] = useState<(typeof RANGES)[number]>("all");
   const [data, setData] = useState<Dashboard | null>(null);
+  const [miners, setMiners] = useState<MiningMinerGroup[]>([]);
   const [error, setError] = useState("");
   const [accepted, setAccepted] = useState(false);
 
   useEffect(() => {
     let stop = false;
     function load() {
-      apiJson<Dashboard>(`/api/v1/chain/dashboard?span=${span}`)
-        .then((body) => { if (!stop) { setData(body); setError(""); } })
+      Promise.all([
+        apiJson<Dashboard>(`/api/v1/chain/dashboard?span=${span}`),
+        apiJson<{ miners: MiningMinerGroup[] }>("/api/v1/chain/mining/computers?everyone=1").catch(() => ({ miners: [] as MiningMinerGroup[] })),
+      ])
+        .then(([body, roster]) => {
+          if (stop) return;
+          setData(body);
+          setMiners(roster.miners || []);
+          setError("");
+        })
         .catch((err: Error) => { if (!stop) setError(err.message); });
     }
     load();
@@ -79,6 +89,7 @@ export default function ProjectCoinDashboard() {
         <Stat label="Rejected attempts" value={mining ? String(mining.failed) : "—"} />
       </div>
       {wallet ? <p className="text-sm text-muted">{wallet.confirmation_rule}</p> : null}
+      <ComputersPanel computers={miners.length ? undefined : data?.mining?.computers} groups={miners.length ? miners : undefined} symbol={symbol} />
       <div className="grid lg:grid-cols-2 gap-3">
         <section className="coin-panel"><h2 className="font-semibold mb-2">Rewards</h2><RewardChart rows={data?.series.rewards || []} /></section>
         <section className="coin-panel"><h2 className="font-semibold mb-2">Hash rate</h2><HashChart rows={data?.series.hashrate || []} /></section>

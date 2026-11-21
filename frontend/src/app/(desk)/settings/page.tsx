@@ -95,7 +95,7 @@ export default function SettingsPage() {
     }
     await apiJson("/api/v1/ai/config", { method: "PUT", body: JSON.stringify(body) });
     loadApis();
-    form.reset();
+    event.currentTarget.reset();
     const saved = provider === "openai"
       ? "OpenAI saved. Users never see this key."
       : provider === "deepseek"
@@ -118,7 +118,7 @@ export default function SettingsPage() {
       setEmailFrom(saved.from || "");
       setEmailReady(saved.configured);
       loadApis();
-      form.reset();
+      event.currentTarget.reset();
       setMessage("Resend saved. Users never see this key.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Email settings were not saved");
@@ -182,7 +182,7 @@ export default function SettingsPage() {
         }),
       });
       setConnectors(body);
-      form.reset();
+      event.currentTarget.reset();
       setMessage("Connector keys saved. Users only fill broker login, server, and password when they add an account.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Connector keys were not saved");
@@ -203,7 +203,7 @@ export default function SettingsPage() {
       });
       setTelegramAppId(body.app_id || "");
       loadApis();
-      form.reset();
+      event.currentTarget.reset();
       setMessage("Telegram app saved. Users only sign in with their phone on the Telegram page.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Telegram was not saved");

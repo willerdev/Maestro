@@ -8,6 +8,8 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.connectors.options_platforms import BROWSER_SESSION, is_pocket_live, normalize_platform, platform_from_broker, platform_label, platform_of
+from app.connectors.pocketoption import format_ssid
 from app.connectors.registry import connector_for
 from app.services.connection_probe import MetaApiTokenError, probe_connection, resolve_metaapi_credentials
 from app.services.pocket_browser import PocketLoginError, close_login, login_status
@@ -73,11 +75,15 @@ class AccountError(Exception):
 def _pocket_credentials(credentials: dict, user_id: str) -> dict:
     session_id = str(credentials.get("pocket_session_id") or "").strip()
     if not session_id:
-        raise PocketLoginError("Open the Pocket Option window and sign in")
+        raise PocketLoginError("Open the options window and sign in")
     chosen = str(credentials.get("active_mode") or "").strip().lower()
     body = login_status(session_id, user_id).credentials()
     if chosen in {"demo", "real"}:
         body["active_mode"] = chosen
+    try:
+        body["options_platform"] = normalize_platform(credentials.get("options_platform") or body.get("options_platform") or "pocketoption")
+    except ValueError as exc:
+        raise PocketLoginError(str(exc)) from exc
     return body
 
 
@@ -143,9 +149,24 @@ def ensure_rule_row(db: Session, profile_id: UUID, code: str) -> RiskRule:
     return row
 
 
+def desk_operator(roles: list[str]) -> bool:
+    return any(role in {"SUPER_ADMIN", "ADMIN"} for role in roles) or allows(roles, "users.manage")
+
+
+def account_visibility(roles: list[str]) -> dict[str, bool]:
+    operator = desk_operator(roles)
+    return {
+        "org_wide": operator or "RISK_MANAGER" in roles,
+        "webhook": operator,
+    }
+
+
 def visible_account_query(db: Session, user: User, roles: list[str]):
     query = select(Account).where(Account.organization_id == user.organization_id)
-    if any(role in {"SUPER_ADMIN", "ADMIN", "RISK_MANAGER"} for role in roles) or allows(roles, "users.manage"):
+    scope = account_visibility(roles)
+    if not scope["webhook"]:
+        query = query.where(Account.connection_method != "webhook")
+    if scope["org_wide"]:
         return query
     grant_ids = select(AccountGrant.account_id).where(AccountGrant.user_id == user.id)
     return query.where(Account.id.in_(grant_ids))
@@ -171,8 +192,14 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
         raise AccountError(400, "Unsupported connection method")
     from app.services.system_config_service import method_is_open
 
+    if method == "webhook" and not desk_operator(roles):
+        raise AccountError(403, "This account type is not available")
     if not method_is_open(db, user.organization_id, method):
         raise AccountError(400, "This account type is not available")
+    from app.services.expense_service import deposit_ready
+
+    if method != "mining" and not deposit_ready(db, user, roles):
+        raise AccountError(400, "Deposit a minimum of $500 before adding this account. Project Coin can be added now.")
     credentials = dict(payload.get("credentials") or {})
     if method in {"metaapi", "passprop"}:
         try:
@@ -189,6 +216,9 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
             credentials = _pocket_credentials(credentials, str(user.id))
         except PocketLoginError as exc:
             raise AccountError(400, exc.detail) from exc
+        taken = _owned_option_platforms(db, user.id)
+        if platform_of(credentials) in taken:
+            raise AccountError(409, f"{platform_label(platform_of(credentials))} is already connected.")
     found = None
     connected = False
     desk = (
@@ -199,13 +229,20 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
     )
     if desk:
         if method == "mining":
-            display_name, account_number, broker, server, currency = (
-                "Project Coin",
-                "project-coin",
-                "Project Coin",
-                "maestro",
-                "PCOIN",
-            )
+            broker, server, currency = "Project Coin", "maestro", "PCOIN"
+            account_number = "project-coin"
+            series = 1
+            while db.scalar(
+                select(Account.id).where(
+                    Account.organization_id == user.organization_id,
+                    Account.broker == broker,
+                    Account.server == server,
+                    Account.account_number == account_number,
+                )
+            ):
+                series += 1
+                account_number = f"project-coin-{series}"
+            display_name = "Project Coin" if series == 1 else f"Project Coin {series}"
         else:
             display_name, account_number, broker, server, currency = (
                 "Blockchain contracts",
@@ -268,7 +305,7 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
         currency = str(payload.get("currency") or "USD").upper()
         leverage = str(payload.get("leverage") or "100")
     alias = str(payload.get("display_name") or "").strip()[:160]
-    if alias:
+    if alias and not (method == "mining" and desk and alias == "Project Coin"):
         display_name = alias
     existing = db.scalar(
         select(Account).where(
@@ -279,7 +316,7 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
         )
     )
     if existing is not None:
-        if desk:
+        if desk and method != "mining":
             return existing, None
         raise AccountError(409, "That account is already on the running list")
     counts = _owned_counts(db, user.id)
@@ -289,6 +326,10 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
             raise AccountError(409, "You can add up to 10 MetaTrader accounts.")
         if method == "passprop":
             raise AccountError(409, "You can add up to 10 Pass Props accounts.")
+        if method == "pocketoption":
+            raise AccountError(409, "You can add up to 5 options platforms.")
+        if method == "mining":
+            raise AccountError(409, "You can add up to 20 Project Coin accounts.")
         raise AccountError(409, "You already have one account of this type.")
     now = datetime.now(timezone.utc)
     account = Account(
@@ -328,6 +369,10 @@ def create_account(db: Session, user: User, roles: list[str], payload: dict, ip:
     )
     ensure_account_profile(db, account)
     secret_bundle = None
+    if method == "passprop":
+        from app.services.passprop_service import take_challenge_fee
+
+        take_challenge_fee(db, user, account, credentials, ip)
     if credentials:
         nonce, ciphertext = encrypt_json(credentials)
         db.add(AccountCredential(account_id=account.id, nonce=nonce, ciphertext=ciphertext))
@@ -397,6 +442,17 @@ def load_credentials(db: Session, account_id: UUID) -> dict:
     if row is None:
         return {}
     return decrypt_json(row.nonce, row.ciphertext)
+
+
+def save_credentials(db: Session, account_id: UUID, credentials: dict) -> None:
+    nonce, ciphertext = encrypt_json(credentials)
+    row = db.scalar(select(AccountCredential).where(AccountCredential.account_id == account_id))
+    if row is None:
+        db.add(AccountCredential(account_id=account_id, nonce=nonce, ciphertext=ciphertext))
+        return
+    row.nonce = nonce
+    row.ciphertext = ciphertext
+    row.rotated_at = datetime.now(timezone.utc)
 
 
 def set_monitoring(db: Session, user: User, account: Account, enabled: bool, ip: str) -> Account:
@@ -541,7 +597,13 @@ def _issue_webhook(db: Session, account: Account) -> dict:
 
 
 def _method_limit(method: str) -> int:
-    return 10 if method in {"local_mt5", "passprop"} else 1
+    if method == "mining":
+        return 20
+    if method in {"local_mt5", "passprop"}:
+        return 10
+    if method == "pocketoption":
+        return 5
+    return 1
 
 
 def pocket_public(db: Session, account: Account) -> dict | None:
@@ -561,8 +623,11 @@ def pocket_public(db: Session, account: Account) -> dict | None:
             return None
         return str(raw)
 
+    platform = platform_of(creds) if creds else (platform_from_broker(account.broker) or "pocketoption")
     return {
         "mode": mode,
+        "platform": platform,
+        "platform_label": platform_label(platform),
         "has_demo": has_demo,
         "has_real": has_real,
         "demo_balance": money("demo_balance"),
@@ -609,17 +674,20 @@ def _apply_pocket_book(db: Session, account: Account, creds: dict, mode: str) ->
 
 def set_pocket_mode(db: Session, user: User, account: Account, mode: str, ip: str) -> Account:
     if account.connection_method != "pocketoption":
-        raise AccountError(400, "This is not a Pocket Option account")
+        raise AccountError(400, "This is not an Options Trading account")
     chosen = str(mode or "").strip().lower()
     if chosen not in {"demo", "real"}:
         raise AccountError(400, "Choose Demo or Real")
     creds = dict(load_credentials(db, account.id))
     source = str(creds.get(f"{chosen}_ssid") or creds.get("real_ssid") or creds.get("demo_ssid") or "").strip()
     if not source:
-        raise AccountError(400, "That book is not captured yet. Open the Pocket Option window and sign in on Demo and Real.")
+        raise AccountError(400, f"That book is not captured yet. Open the {platform_label(platform_of(creds))} window and sign in on Demo and Real.")
     creds["active_mode"] = chosen
-    if not str(creds.get(f"{chosen}_ssid") or "").strip():
-        creds[f"{chosen}_ssid"] = source
+    if is_pocket_live(creds):
+        flipped = format_ssid(source, chosen == "demo", str(creds.get("uid") or ""))
+        creds[f"{chosen}_ssid"] = flipped or source
+    else:
+        creds[f"{chosen}_ssid"] = source or BROWSER_SESSION
     now = datetime.now(timezone.utc)
     _write_credentials(db, account, creds, now)
     account.server = chosen
@@ -652,13 +720,17 @@ def set_pocket_mode(db: Session, user: User, account: Account, mode: str, ip: st
 def passprop_public(db: Session, account: Account) -> dict:
     if account.connection_method != "passprop":
         return {}
+    from app.services.passprop_service import challenge_public
+
     creds = load_credentials(db, account.id)
-    return {
+    body = {
         "firm_name": str(creds.get("firm_name") or account.broker or "")[:160],
         "firm_url": str(creds.get("firm_url") or "")[:500],
         "rules": str(creds.get("rules") or "")[:20000],
         "account_size": str(creds.get("account_size") or "")[:40],
     }
+    body.update(challenge_public(creds))
+    return body
 
 
 def _passprop_fields(credentials: dict) -> dict:
@@ -675,6 +747,23 @@ def _passprop_fields(credentials: dict) -> dict:
     return {"firm_name": firm, "firm_url": url, "rules": rules, "account_size": size}
 
 
+def _owned_option_platforms(db: Session, user_id: UUID) -> list[str]:
+    rows = db.scalars(
+        select(Account)
+        .join(AccountGrant, AccountGrant.account_id == Account.id)
+        .where(AccountGrant.user_id == user_id, Account.connection_method == "pocketoption")
+    ).all()
+    used: list[str] = []
+    for row in rows:
+        code = platform_from_broker(row.broker)
+        if not code:
+            creds = load_credentials(db, row.id)
+            code = platform_of(creds)
+        if code not in used:
+            used.append(code)
+    return used
+
+
 def _owned_counts(db: Session, user_id: UUID) -> dict[str, int]:
     rows = db.execute(
         select(Account.connection_method, func.count())
@@ -685,18 +774,25 @@ def _owned_counts(db: Session, user_id: UUID) -> dict[str, int]:
     return {str(method): int(count) for method, count in rows}
 
 
-def system_overview(db: Session, user: User) -> dict:
+def system_overview(db: Session, user: User, roles: list[str] | None = None) -> dict:
+    from app.services.auth_service import role_codes_for
+    from app.services.expense_service import deposit_ready
     from app.services.system_config_service import account_type_flags
 
     counts = _owned_counts(db, user.id)
     limits = {method: _method_limit(method) for method in sorted(METHODS)}
     owned = {method: counts.get(method, 0) for method in limits}
     enabled = account_type_flags(db, user.organization_id)
+    codes = list(roles or role_codes_for(db, user.id))
+    if not account_visibility(codes)["webhook"]:
+        enabled = {**enabled, "webhook": False}
     return {
         "counts": owned,
         "limits": limits,
         "enabled": enabled,
+        "options_used": _owned_option_platforms(db, user.id) if owned.get("pocketoption") else [],
         "can_add": any(enabled.get(method, True) and owned[method] < limits[method] for method in limits),
+        "deposit_ready": deposit_ready(db, user, codes),
     }
 
 

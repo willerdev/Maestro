@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 from uuid import UUID
@@ -7,15 +8,16 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.chain.contract_yield import DEFAULT_BPS, LOCK_DAYS, MIN_DEPOSIT, clamp_rate_bps, daily_yield, is_unlocked, rate_label, unlock_at
+from app.chain.contract_yield import DEFAULT_BPS, LOCK_DAYS, MIN_DEPOSIT, clamp_rate_bps, daily_yield, is_unlocked, rate_label, unlock_at, working_day_profit
 from app.domain.audit import write_audit
 from app.models.chain_entities import ContractSettings, ContractStake, ContractYield
-from app.models.entities import Account, AssetTransfer, User
+from app.models.entities import Account, AccountState, AssetTransfer, User
 from app.services.account_service import get_visible_account, visible_account_query
 from app.services.asset_service import _available, _payload
 
 _USDT = ("usdttrc20", "usdt")
 _SCALE = Decimal("0.00000001")
+_PROFIT_BAND = re.compile(r"\[\[wd:(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)\]\]")
 
 
 class ContractServiceError(Exception):
@@ -108,6 +110,7 @@ def fund_contract(db: Session, user: User, roles: list[str], account_id: UUID, a
     )
     db.add(stake)
     db.flush()
+    _mirror_contract_balance(db, stake)
     write_audit(
         db,
         organization_id=user.organization_id,
@@ -215,8 +218,36 @@ def accrue_all(db: Session) -> int:
     return credited
 
 
+def _profit_band(db: Session, stake: ContractStake) -> tuple[Decimal, Decimal] | None:
+    transfer = db.get(AssetTransfer, stake.transfer_id) if stake.transfer_id else None
+    if transfer is None:
+        return None
+    match = _PROFIT_BAND.search(transfer.note or "")
+    if match is None:
+        return None
+    return Decimal(match.group(1)), Decimal(match.group(2))
+
+
+def _mirror_contract_balance(db: Session, stake: ContractStake) -> None:
+    if stake.status != "hold":
+        return
+    state = db.get(AccountState, stake.account_id)
+    if state is None:
+        return
+    held = stake.principal + stake.yield_earned
+    state.balance = held
+    state.equity = held
+    state.free_margin = held
+    if state.peak_equity < held:
+        state.peak_equity = held
+    if state.day_start_equity <= 0:
+        state.day_start_equity = stake.principal
+    state.as_of = datetime.now(timezone.utc)
+
+
 def _accrue_stake(db: Session, stake: ContractStake) -> int:
     rules = settings_for(db, stake.organization_id)
+    band = _profit_band(db, stake)
     today = datetime.now(timezone.utc).date()
     credited = 0
     current = stake.last_yield_on
@@ -226,19 +257,27 @@ def _accrue_stake(db: Session, stake: ContractStake) -> int:
             break
         if credited >= 30:
             break
-        held = stake.principal + stake.yield_earned
-        amount = daily_yield(held, rules.daily_rate_bps)
+        if band is None:
+            held = stake.principal + stake.yield_earned
+            amount = daily_yield(held, rules.daily_rate_bps)
+            rate = rules.daily_rate_bps
+        else:
+            amount = working_day_profit(nxt, band[0], band[1])
+            rate = 0
         if amount <= 0:
             stake.last_yield_on = nxt
             current = nxt
             continue
         existing = db.scalar(select(ContractYield).where(ContractYield.stake_id == stake.id, ContractYield.day == nxt))
         if existing is None:
-            db.add(ContractYield(stake_id=stake.id, day=nxt, rate_bps=rules.daily_rate_bps, amount=amount))
+            db.add(ContractYield(stake_id=stake.id, day=nxt, rate_bps=rate, amount=amount))
             stake.yield_earned += amount
+            if state := db.get(AccountState, stake.account_id):
+                state.day_start_equity = stake.principal + stake.yield_earned - amount
         stake.last_yield_on = nxt
         current = nxt
         credited += 1
+    _mirror_contract_balance(db, stake)
     return credited
 
 

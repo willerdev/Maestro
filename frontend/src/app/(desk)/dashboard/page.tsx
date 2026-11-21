@@ -1,21 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { DailyPnlChart, DrawdownChart, EquityChart, ExposureChart, FrequencyChart, UtilizationChart, WinLossChart } from "@/components/Charts";
 import { PageTitle } from "@/components/Shell";
-import { apiJson } from "@/lib/api";
+import { apiJson, deviceId, isSystemAdmin, type User } from "@/lib/api";
 import { keepDefaultWallet } from "@/lib/defaultWallet";
 
-type Expense = { id: string; amount: string; currency: string; note: string; created_at: string; status: string };
 type Operating = {
   required: boolean;
   allowed: boolean;
-  minimum: string;
-  available: string;
-  reason: string;
-  cycle: { started_at: string; ends_at: string; target: string; collected: string; remaining: string; hours_left: number } | null;
-  expenses: Expense[];
+  licensed?: boolean;
+  funded?: boolean;
+  mining_allowed?: boolean;
+  reason?: string;
 };
 type Summary = Record<string, string | number>;
 type Charts = {
@@ -50,8 +48,13 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [paymentNeeded, setPaymentNeeded] = useState(false);
   const [operating, setOperating] = useState<Operating | null>(null);
+  const [me, setMe] = useState<User | null>(null);
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseError, setLicenseError] = useState("");
+  const own = me ? !isSystemAdmin(me.roles) : true;
 
   useEffect(() => {
+    apiJson<User>("/api/v1/auth/me").then(setMe).catch(() => undefined);
     keepDefaultWallet()
       .then((body) => setPaymentNeeded(!body.configured && body.wallet !== "hosted"))
       .catch(() => setPaymentNeeded(false));
@@ -66,30 +69,52 @@ export default function DashboardPage() {
       .catch((err: Error) => setError(err.message));
   }, []);
 
+  async function activateLicense(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const code = String(new FormData(form).get("code") || "").trim();
+    setLicenseError("");
+    setLicenseBusy(true);
+    try {
+      await apiJson("/api/v1/licenses/activate", {
+        method: "POST",
+        body: JSON.stringify({ code, device_id: deviceId() }),
+      });
+      form.reset();
+      window.location.reload();
+    } catch (err) {
+      setLicenseError(err instanceof Error ? err.message : "License could not be activated");
+    } finally {
+      setLicenseBusy(false);
+    }
+  }
+
   return (
     <div>
-      <PageTitle title="Dashboard" detail="Firm-wide risk picture across monitored MT5 accounts." />
+      <PageTitle title="Dashboard" detail={own ? "Your accounts, balances, and risk on this login." : "Risk picture across the accounts on this desk."} />
       {error ? <p className="text-loss">{error}</p> : null}
       {operating?.required ? (
         <section className="mb-4 border border-line bg-panel rounded-lg px-4 py-4">
           <h2 className="font-semibold mb-1">Operating balance</h2>
-          {operating.allowed ? (
-            <p className="text-sm text-muted">
-              Maestro needs {operating.minimum} USDT TRC20 on the wallet. Hourly expenses of $2 to $68 move USDT to the firm wallet and consume {operating.cycle?.target || operating.minimum} over 5 days.
-              {operating.cycle ? ` Collected ${operating.cycle.collected} of ${operating.cycle.target}. ${operating.cycle.remaining} left · ${operating.cycle.hours_left} hours remaining.` : ""}
-            </p>
+          {operating.licensed ? (
+            <p className="text-sm text-muted mb-2">This computer is licensed.</p>
           ) : (
-            <p className="text-sm text-loss">{operating.reason} Current wallet {operating.available} USDT TRC20. <Link className="text-accent" href="/wallet">Open wallet</Link></p>
+            <form className="flex flex-col gap-2 mb-3 max-w-md" onSubmit={activateLicense}>
+              <label className="label" htmlFor="license-code">License key</label>
+              <input id="license-code" name="code" autoComplete="off" placeholder="MAE-XXXX-XXXX-XXXX" required />
+              <button className="primary" type="submit" disabled={licenseBusy}>{licenseBusy ? "Activating…" : "Activate license"}</button>
+              {licenseError ? <p className="text-sm text-loss">{licenseError}</p> : <p className="text-xs text-muted">One key works on this computer only. It cannot be used on another computer after activation.</p>}
+            </form>
           )}
-          {operating.expenses.length ? (
-            <ul className="text-sm mt-3">
-              {operating.expenses.slice(0, 6).map((row) => (
-                <li key={row.id} className="border-t border-line py-1 flex justify-between gap-3">
-                  <span>Expense{row.note ? ` · ${row.note}` : ""}</span>
-                  <span className="num">{row.amount} {row.currency === "usdttrc20" ? "USDT TRC20" : row.currency}</span>
-                </li>
-              ))}
-            </ul>
+          {operating.funded ? (
+            <p className="text-sm text-muted">Deposit a minimum of $500.</p>
+          ) : (
+            <p className="text-sm text-loss">
+              Deposit a minimum of $500 to operate. <Link className="text-accent" href="/wallet">Open wallet</Link>
+            </p>
+          )}
+          {!operating.funded ? (
+            <p className="text-sm mt-2">Project Coin can be added without that deposit. Other account types stay closed until the wallet has $500. <Link className="text-accent" href="/accounts/new">Add Project Coin</Link></p>
           ) : null}
         </section>
       ) : null}
@@ -98,8 +123,7 @@ export default function DashboardPage() {
           Default self-hosted wallet is the payment wallet. <Link className="text-accent" href="/payments">Open payment settings</Link>.
         </p>
       ) : null}
-      {operating && !operating.allowed ? null : (
-        <>
+      <>
           <section className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 mb-6">
             {TILES.map(([key, label]) => (
               <article key={key} className="bg-panel border border-line rounded-lg px-3 py-3">
@@ -120,7 +144,6 @@ export default function DashboardPage() {
             </section>
           ) : null}
         </>
-      )}
     </div>
   );
 }
