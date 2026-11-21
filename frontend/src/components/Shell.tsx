@@ -384,9 +384,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
 export function PageTitle({ title, detail }: { title: string; detail?: ReactNode }) {
   return (
-    <header className="mb-5">
-      <h1 className="text-2xl font-semibold">{title}</h1>
-      {detail ? <p className="text-sm text-muted mt-1">{detail}</p> : null}
+    <header className="page-head">
+      <h1>{title}</h1>
+      {detail ? <p className="text-sm text-muted">{detail}</p> : null}
     </header>
   );
 }

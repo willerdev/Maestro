@@ -26,20 +26,10 @@ type Charts = {
   win_loss: { wins: number; losses: number };
 };
 
-const TILES: [string, string][] = [
-  ["total_accounts", "Total accounts"],
-  ["connected_accounts", "Connected"],
-  ["total_balance", "Total balance"],
-  ["total_equity", "Total equity"],
-  ["total_open_risk", "Open risk"],
-  ["today_pl", "Today P/L"],
-  ["today_loss", "Today loss"],
-  ["current_drawdown", "Current drawdown %"],
-  ["max_drawdown", "Max drawdown %"],
-  ["open_positions", "Open positions"],
-  ["trades_today", "Trades today"],
-  ["risk_violations", "Risk violations"],
-  ["account_health", "Account health"],
+const BANDS: { title: string; tiles: [string, string][] }[] = [
+  { title: "Capital", tiles: [["total_equity", "Book equity"], ["total_balance", "Cash balance"], ["total_open_risk", "Open risk"]] },
+  { title: "Performance", tiles: [["today_pl", "Today P/L"], ["today_loss", "Today loss"], ["current_drawdown", "Drawdown %"], ["max_drawdown", "Max drawdown %"]] },
+  { title: "Activity", tiles: [["total_accounts", "Accounts"], ["connected_accounts", "Connected"], ["open_positions", "Open positions"], ["trades_today", "Trades today"], ["risk_violations", "Open violations"], ["account_health", "Book health"]] },
 ];
 
 export default function DashboardPage() {
@@ -91,7 +81,7 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <PageTitle title="Dashboard" detail={own ? "Your accounts, balances, and risk on this login." : "Risk picture across the accounts on this desk."} />
+      <PageTitle title="Dashboard" detail={own ? "Equity, risk, and trading activity on this login." : "Equity, risk, and trading activity across the accounts on this desk."} />
       {error ? <p className="text-loss">{error}</p> : null}
       {operating?.required ? (
         <section className="mb-4 border border-line bg-panel rounded-lg px-4 py-4">
@@ -124,14 +114,24 @@ export default function DashboardPage() {
         </p>
       ) : null}
       <>
-          <section className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 mb-6">
-            {TILES.map(([key, label]) => (
-              <article key={key} className="bg-panel border border-line rounded-lg px-3 py-3">
-                <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
-                <div className={`num text-lg mt-1 ${tone(key, summary?.[key])}`}>{summary ? String(summary[key]) : "—"}</div>
-              </article>
-            ))}
+          <section className="kpi-band">
+            <h2>Performance window</h2>
+            <div className="kpi-grid">
+              <Kpi label="Today P/L" value={summary ? String(summary.today_pl) : "—"} className={tone("today_pl", summary?.today_pl)} />
+              <Kpi label="7-day P/L" value={windowPnl(charts?.daily_pnl, 7)} className={pnlTone(windowPnl(charts?.daily_pnl, 7))} />
+              <Kpi label="30-day P/L" value={windowPnl(charts?.daily_pnl, 30)} className={pnlTone(windowPnl(charts?.daily_pnl, 30))} />
+            </div>
           </section>
+          {BANDS.map((band) => (
+            <section key={band.title} className="kpi-band">
+              <h2>{band.title}</h2>
+              <div className="kpi-grid">
+                {band.tiles.map(([key, label]) => (
+                  <Kpi key={key} label={label} value={summary ? String(summary[key]) : "—"} className={tone(key, summary?.[key])} />
+                ))}
+              </div>
+            </section>
+          ))}
           {charts ? (
             <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <EquityChart data={charts.equity} />
@@ -146,6 +146,33 @@ export default function DashboardPage() {
         </>
     </div>
   );
+}
+
+function Kpi({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <article className="kpi">
+      <div className="k">{label}</div>
+      <div className={`v num ${className || ""}`}>{value}</div>
+    </article>
+  );
+}
+
+function windowPnl(rows: { date: string; pnl: string }[] | undefined, days: number) {
+  if (!rows?.length) return "—";
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const sum = rows.reduce((total, row) => {
+    const time = new Date(row.date).getTime();
+    if (Number.isNaN(time) || time < cutoff) return total;
+    const amount = Number(row.pnl);
+    return total + (Number.isFinite(amount) ? amount : 0);
+  }, 0);
+  return sum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function pnlTone(value: string) {
+  const amount = Number(value.replace(/,/g, ""));
+  if (!Number.isFinite(amount) || value === "—") return "";
+  return amount < 0 ? "text-loss" : "text-profit";
 }
 
 function tone(key: string, value: string | number | undefined) {

@@ -248,6 +248,11 @@ export default function TelegramPage() {
         </section>
       )}
       <section>
+        <h2 className="text-lg font-semibold">Your notifications</h2>
+        <p className="text-sm text-muted mt-1">These credentials belong to this login. Mining income, contract updates, and account updates are sent to the chat id.</p>
+        <NoticeForm />
+      </section>
+      <section>
         <h2 className="text-lg font-semibold">Copy signals</h2>
         <p className="text-sm text-muted mt-1">Sign in with your phone so the desk can read chats you already belong to. DeepSeek keeps a message only when it has a pair, a direction, and an entry. Stop and target may be missing. Ordinary chat is ignored. A found trade stays pending for 10 minutes, then it is deleted if it was not executed. Turn on auto execute to send it as soon as it is found. The risk engine still decides. The reply arrives on the bot chat. The chat name is stored as the trade comment.</p>
         <label className="text-sm flex gap-2 items-center mt-4">
@@ -320,5 +325,63 @@ export default function TelegramPage() {
         </ul>
       </aside>
     </div>
+  );
+}
+
+function NoticeForm() {
+  const [appId, setAppId] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [hashSet, setHashSet] = useState(false);
+  const [tokenSet, setTokenSet] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    apiJson<{ connected: boolean; app_id: string; chat_id: string; api_hash_set: boolean; bot_token_set: boolean }>("/api/v1/telegram/notify")
+      .then((body) => {
+        setAppId(body.app_id || "");
+        setChatId(body.chat_id || "");
+        setHashSet(Boolean(body.api_hash_set));
+        setTokenSet(Boolean(body.bot_token_set));
+        setConnected(Boolean(body.connected));
+      })
+      .catch((err: Error) => setNote(err.message));
+  }, []);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const body = await apiJson<{ connected: boolean }>("/api/v1/telegram/notify", {
+        method: "PUT",
+        body: JSON.stringify({
+          app_id: appId,
+          api_hash: String(form.get("api_hash") || ""),
+          bot_token: String(form.get("bot_token") || ""),
+          chat_id: chatId,
+        }),
+      });
+      setConnected(Boolean(body.connected));
+      setHashSet(true);
+      setTokenSet(true);
+      setNote("Telegram connected for this login.");
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Telegram was not saved");
+    }
+  }
+
+  return (
+    <form className="flex flex-col gap-3 mt-3 max-w-md" autoComplete="off" onSubmit={onSubmit}>
+      <p className="text-sm">{connected ? "Connected" : "Not connected"}</p>
+      <input value={appId} onChange={(event) => setAppId(event.target.value)} inputMode="numeric" placeholder="App ID from my.telegram.org" required />
+      <input name="api_hash" type="password" autoComplete="off" placeholder={hashSet ? "API hash saved. Leave blank to keep it" : "API hash from my.telegram.org"} required={!hashSet} />
+      <input name="bot_token" type="password" autoComplete="off" placeholder={tokenSet ? "Bot token saved. Leave blank to keep it" : "Bot token from BotFather"} required={!tokenSet} />
+      <input value={chatId} onChange={(event) => setChatId(event.target.value)} inputMode="numeric" placeholder="Chat ID" required />
+      <div className="flex gap-2">
+        <button className="primary" type="submit">Save and connect</button>
+        <button className="ghost" type="button" onClick={() => apiJson("/api/v1/telegram/notify/test", { method: "POST" }).then(() => setNote("Test sent. Check Telegram.")).catch((err: Error) => setNote(err.message))}>Send a test</button>
+      </div>
+      {note ? <p className="text-sm">{note}</p> : null}
+    </form>
   );
 }

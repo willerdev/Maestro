@@ -231,7 +231,9 @@ def wallet_view(db: Session, org_id, user_id) -> dict:
     from app.services.mining_plan_service import bonus_available
 
     bonus = bonus_available(db, org_id, user_id)
-    spendable = max(0, ledger.available(row.address) - held + bonus)
+    from app.services.pcoin_approval_service import held_pcoin_atomic
+
+    spendable = max(0, ledger.available(row.address) - held + bonus - held_pcoin_atomic(db, org_id, user_id))
     rules = public_settings(db, org_id)
     return {
         "address": row.address,
@@ -253,7 +255,7 @@ def wallet_view(db: Session, org_id, user_id) -> dict:
         "usdt_total": format_usdt(usdt_balance(db, org_id, user_id)),
         "exchange_rate": rules["rate"],
         "exchange_label": rules["label"],
-        "confirmation_rule": "A mining reward is spendable once its block is accepted. Converted PCoin is reserved and cannot be sent.",
+        "confirmation_rule": "New Project Coin is spendable after an admin approves it. Converted PCoin is reserved and cannot be sent.",
         "symbol": params.symbol,
         "coin": _params_row(params),
         "circulating": format_amount(minted),

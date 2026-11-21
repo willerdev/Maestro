@@ -125,11 +125,11 @@ function miningAccounts() {
 
 const SECTIONS = {
   trading: [["accounts", "Accounts"], ["trades", "Trades"], ["journal", "Journal"]],
-  wallet: [["wallet", "Wallet"]],
+  wallet: [["wallet", "Wallet"], ["funds", "Funds"]],
   connect: [["contracts", "Contracts"], ["passprops", "Pass Props"], ["coin", "Project Coin"], ["payments", "Payments"], ["telegram", "Telegram"], ["webhooks", "Webhooks"]],
   more: [["approvals", "Approvals"], ["password", "Password"]],
 };
-const TITLES = { wallet: "Wallet", accounts: "Accounts", trades: "Trades", journal: "Journal", contracts: "Contracts", passprops: "Pass Props", coin: "Project Coin", payments: "Payments", telegram: "Telegram", webhooks: "Webhooks", approvals: "Approvals", password: "Password" };
+const TITLES = { wallet: "Wallet", funds: "Funds", accounts: "Accounts", trades: "Trades", journal: "Journal", contracts: "Contracts", passprops: "Pass Props", coin: "Project Coin", payments: "Payments", telegram: "Telegram", webhooks: "Webhooks", approvals: "Approvals", password: "Password" };
 
 function groupFor(section) {
   return Object.keys(SECTIONS).find((group) => SECTIONS[group].some(([id]) => id === section)) || "wallet";
@@ -153,8 +153,33 @@ function showView(name) {
   subnav.hidden = items.length < 2;
   subnav.innerHTML = items.map(([id, label]) => `<button type="button" data-section="${id}" class="${id === section ? "on" : ""}">${label}</button>`).join("");
   document.querySelector("#title").textContent = TITLES[section] || "Wallet";
-  const loaders = { trades: loadTrades, journal: loadJournal, passprops: loadPassProps, payments: loadPayments, telegram: loadTelegram, webhooks: loadWebhooks, approvals: loadApprovals };
+  const loaders = { funds: loadFunds, trades: loadTrades, journal: loadJournal, passprops: loadPassProps, payments: loadPayments, telegram: loadTelegram, webhooks: loadWebhooks, approvals: loadApprovals };
   if (loaders[section]) loaders[section]().catch((error) => showNotice(error.message));
+}
+
+async function loadFunds() {
+  const ledgerBox = document.querySelector("#ledger");
+  const fundBox = document.querySelector("#funds");
+  let ledger = null;
+  let funds = [];
+  try {
+    [ledger, funds] = await Promise.all([api("/api/v1/ledger"), api("/api/v1/funds")]);
+  } catch (error) {
+    ledgerBox.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+    fundBox.innerHTML = "";
+    return;
+  }
+  const accounts = ledger.accounts || [];
+  ledgerBox.innerHTML = accounts.length
+    ? `<article class="account"><strong>${ledger.balanced ? "Books balanced" : "Books out of balance"}</strong>${accounts.map((row) => `<p class="meta">${escapeHtml(row.code)} ${escapeHtml(row.name)} · ${escapeHtml(row.balance)}</p>`).join("")}</article>`
+    : `<p class="muted">No posted movements yet.</p>`;
+  fundBox.innerHTML = listOrEmpty(funds, (fund) => `
+    <article class="account">
+      <strong>${escapeHtml(fund.name)}</strong>
+      <p class="meta">Equity ${escapeHtml(fund.aum)} ${escapeHtml(fund.base_currency)}</p>
+      <p class="meta">Unit price ${escapeHtml(fund.unit_price)} · Units ${escapeHtml(fund.units_outstanding)}</p>
+    </article>
+  `, "No funds yet. Funds are created in the desk software.");
 }
 
 function listOrEmpty(rows, card, empty) {
@@ -207,11 +232,63 @@ async function loadPayments() {
 }
 
 async function loadTelegram() {
-  const body = await api("/api/v1/telegram");
-  document.querySelector("#telegram").innerHTML = `
-    <article class="account"><strong>Telegram</strong><span class="meta">${body.account_connected ? "Phone is signed in" : "Phone is not signed in"}</span><span class="pill">${body.auto_execute ? "Auto execute on" : "Auto execute off"}</span></article>
-    <p class="muted">Signing in and choosing signal chats stays in the desk software.</p>`;
+  const body = await api("/api/v1/telegram/notify");
+  const form = document.querySelector("#telegram-form");
+  form.app_id.value = body.app_id || "";
+  form.chat_id.value = body.chat_id || "";
+  form.api_hash.required = !body.api_hash_set;
+  form.bot_token.required = !body.bot_token_set;
+  form.api_hash.placeholder = body.api_hash_set ? "Saved. Leave blank to keep it" : "From my.telegram.org";
+  form.bot_token.placeholder = body.bot_token_set ? "Saved. Leave blank to keep it" : "From BotFather";
+  const state = document.querySelector("#telegram-state");
+  state.textContent = body.connected ? "Connected" : "Not connected";
+  state.classList.toggle("ok", Boolean(body.connected));
 }
+
+document.querySelector("#telegram-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#telegram-error");
+  const button = document.querySelector("#telegram-save");
+  const data = new FormData(form);
+  error.hidden = true;
+  button.disabled = true;
+  button.textContent = "Saving…";
+  try {
+    await api("/api/v1/telegram/notify", {
+      method: "PUT",
+      body: JSON.stringify({
+        app_id: String(data.get("app_id") || "").trim(),
+        api_hash: String(data.get("api_hash") || "").trim(),
+        bot_token: String(data.get("bot_token") || "").trim(),
+        chat_id: String(data.get("chat_id") || "").trim(),
+      }),
+    });
+    form.api_hash.value = "";
+    form.bot_token.value = "";
+    showNotice("Telegram connected.");
+    await loadTelegram();
+  } catch (err) {
+    error.hidden = false;
+    error.textContent = err.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Save and connect";
+  }
+});
+
+document.querySelector("#telegram-test").addEventListener("click", async () => {
+  const button = document.querySelector("#telegram-test");
+  button.disabled = true;
+  try {
+    await api("/api/v1/telegram/notify/test", { method: "POST" });
+    showNotice("Test sent. Check Telegram.");
+  } catch (err) {
+    showNotice(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 async function loadWebhooks() {
   const rows = (await api("/api/v1/accounts")).filter((row) => row.connection_method === "webhook");

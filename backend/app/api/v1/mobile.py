@@ -19,10 +19,13 @@ from app.core.security import hash_password, verify_password
 from app.domain.audit import write_audit
 from app.services.account_service import AccountError, create_account, save_mt5_details, visible_account_query
 from app.services.auth_service import password_is_strong
-from app.services.asset_service import AssetError, _address, _available, asset_home, request_deposit, request_withdrawal
+from app.services.asset_service import AssetError, _address, _available, approve_withdrawal, asset_home, list_withdrawal_requests, reject_withdrawal, request_deposit, request_withdrawal
 from app.services.contract_service import ContractServiceError, desk, fund_contract, withdraw_contract
 from app.services.conversion_service import ConversionServiceError, convert, pcoin_hold, preview, public_settings
+from app.domain.rbac import allows
 from app.services.mining_plan_service import bonus_available
+from app.services.pcoin_approval_service import PcoinApprovalError, decide_pcoin_credit, held_pcoin_atomic, list_pending_credits
+from app.services.portal_service import PortalError, decide_application, decide_capital_request, list_applications, list_capital_requests
 
 router = APIRouter()
 
@@ -63,6 +66,10 @@ class PhoneAccountIn(BaseModel):
 class PasswordChangeIn(BaseModel):
     current_password: str
     new_password: str
+
+
+class DecisionIn(BaseModel):
+    decision: str
 
 
 def _fail(exc: Exception) -> None:
@@ -121,7 +128,7 @@ def _pcoin_atomic(db: Session, user) -> int:
         )
     )
     chain = int(incoming or 0) - int(outgoing or 0) - int(pending or 0)
-    return max(0, chain - pcoin_hold(db, user.organization_id, user.id) + bonus_available(db, user.organization_id, user.id))
+    return max(0, chain - pcoin_hold(db, user.organization_id, user.id) + bonus_available(db, user.organization_id, user.id) - held_pcoin_atomic(db, user.organization_id, user.id))
 
 
 def _money(value: Decimal) -> str:
@@ -169,7 +176,7 @@ def home(principal: Principal = Depends(get_principal), db: Session = Depends(ge
     wallet = asset_home(db, user)
     db.commit()
     return {
-        "user": {"email": user.email, "full_name": user.full_name},
+        "user": {"email": user.email, "full_name": user.full_name, "admin": allows(principal.roles, "users.manage")},
         "usdt": _money(usdt),
         "pcoin": format_amount(atomic),
         "pcoin_usdt": _money(pcoin / rate if rate else 0),
@@ -232,6 +239,74 @@ def convert_pcoin(body: AmountIn, principal: Principal = Depends(get_principal),
         return convert(db, principal.user.organization_id, principal.user.id, format(body.amount, "f"))
     except ConversionServiceError as exc:
         _fail(exc)
+
+
+def _admin(principal: Principal) -> None:
+    if not allows(principal.roles, "users.manage"):
+        raise HTTPException(403, "Missing permission")
+
+
+@router.get("/mobile/approvals")
+def approvals(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _admin(principal)
+    try:
+        credits = list_pending_credits(db, principal.user, principal.roles)
+    except PcoinApprovalError as exc:
+        _fail(exc)
+    withdrawals = [row for row in list_withdrawal_requests(db, principal.user, principal.roles) if row.get("status") == "requested"]
+    applications = [row for row in list_applications(db, principal.user) if row.get("status") == "pending"]
+    capital = [row for row in list_capital_requests(db, principal.user) if row.get("status") == "pending"]
+    db.commit()
+    return {"credits": credits, "withdrawals": withdrawals, "applications": applications, "capital": capital}
+
+
+@router.post("/mobile/approvals/credits/{credit_id}")
+def review_credit(credit_id: UUID, body: DecisionIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _admin(principal)
+    try:
+        payload = decide_pcoin_credit(db, principal.user, principal.roles, credit_id, body.decision, _client_ip(request))
+    except PcoinApprovalError as exc:
+        _fail(exc)
+    db.commit()
+    return payload
+
+
+@router.post("/mobile/approvals/withdrawals/{transfer_id}")
+def review_withdrawal(transfer_id: UUID, body: DecisionIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _admin(principal)
+    try:
+        if body.decision == "approve":
+            payload = approve_withdrawal(db, principal.user, principal.roles, transfer_id, _client_ip(request))
+        elif body.decision == "reject":
+            payload = reject_withdrawal(db, principal.user, principal.roles, transfer_id, "", _client_ip(request))
+        else:
+            raise AssetError(400, "Choose approve or reject")
+    except AssetError as exc:
+        _fail(exc)
+    db.commit()
+    return payload
+
+
+@router.post("/mobile/approvals/applications/{application_id}")
+def review_application(application_id: UUID, body: DecisionIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _admin(principal)
+    try:
+        payload = decide_application(db, principal.user, application_id, body.decision, "", None)
+    except PortalError as exc:
+        _fail(exc)
+    db.commit()
+    return payload
+
+
+@router.post("/mobile/approvals/capital/{request_id}")
+def review_capital(request_id: UUID, body: DecisionIn, request: Request, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _admin(principal)
+    try:
+        payload = decide_capital_request(db, principal.user, request_id, body.decision, "")
+    except PortalError as exc:
+        _fail(exc)
+    db.commit()
+    return payload
 
 
 @router.post("/mobile/accounts")

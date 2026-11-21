@@ -11,6 +11,7 @@ from app.api.deps import Principal, get_principal
 from app.api.v1.router import _client_ip
 from app.core.database import get_db
 from app.services.fund_service import FundError
+from app.services.ledger_service import ledger_view
 from app.services.wallet_service import WalletError
 from app.services.fund_service import (
     accrue_fees,
@@ -115,6 +116,14 @@ def _call(fn):
         return fn()
     except (FundError, WalletError) as exc:
         raise HTTPException(exc.status, exc.detail) from exc
+
+
+@router.get("/ledger")
+def get_ledger(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    principal.require("funds.read")
+    body = ledger_view(db, principal.user.organization_id)
+    db.commit()
+    return body
 
 
 @router.get("/funds")

@@ -294,6 +294,9 @@ def accrue_user(db: Session, org_id, user_id) -> int:
         entity_id=reference,
         after={"amount": format_amount(atomic), "multiplier": str(multiplier), "seconds": int(seconds)},
     )
+    from app.services.telegram_notice_service import notify_user
+
+    notify_user(db, user_id, f"Mining income: {format_amount(atomic)} PCoin was added and is waiting for the wallet.")
     return atomic
 
 

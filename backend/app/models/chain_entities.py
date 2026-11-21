@@ -264,6 +264,20 @@ class MiningUpgradePayment(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PcoinCreditApproval(Base):
+    __tablename__ = "pcoin_credit_approvals"
+    __table_args__ = (UniqueConstraint("organization_id", "source", "source_key", name="uq_pcoin_credit_source"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    source: Mapped[str] = mapped_column(String(16))
+    source_key: Mapped[str] = mapped_column(String(80))
+    amount_atomic: Mapped[int] = mapped_column(BigInteger, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MiningRewardLedger(Base):
     __tablename__ = "mining_reward_ledger"
     __table_args__ = (UniqueConstraint("organization_id", "reference", name="uq_mining_reward_reference"),)

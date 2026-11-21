@@ -63,6 +63,12 @@
       <h2>Activity</h2>
       <div id="activity" class="stack"></div>
     </div>
+    <div data-panel="funds" hidden>
+      <p class="muted">Posted wallet and fund movements, in the same books as the desk. Subscriptions do not move broker cash.</p>
+      <div id="ledger" class="stack"></div>
+      <h2>Funds</h2>
+      <div id="funds" class="stack"></div>
+    </div>
     <div data-panel="accounts" hidden>
       <div class="actions add-actions">
         <button class="primary" type="button" data-open="add-contract">Add contract</button>
@@ -101,7 +107,26 @@
       <div id="payments" class="stack"></div>
     </div>
     <div data-panel="telegram" hidden>
-      <div id="telegram" class="stack"></div>
+      <article class="card telegram-card">
+        <p class="eyebrow">Connect</p>
+        <h2 class="panel-title">Telegram</h2>
+        <p class="muted">Use your own Telegram API credentials. Mining income, contract updates, and account updates are sent to this chat.</p>
+        <ol class="steps">
+          <li>On my.telegram.org, create an app and copy the app id and API hash.</li>
+          <li>In BotFather, create a bot and copy the token.</li>
+          <li>Open that bot, send /start, then paste the chat id.</li>
+        </ol>
+        <p id="telegram-state" class="pill">Not connected</p>
+        <form id="telegram-form" class="stack">
+          <label>App ID<input name="app_id" inputmode="numeric" autocomplete="off" placeholder="From my.telegram.org" required /></label>
+          <label>API hash<input name="api_hash" type="password" autocomplete="off" placeholder="From my.telegram.org" /></label>
+          <label>Bot token<input name="bot_token" type="password" autocomplete="off" placeholder="From BotFather" /></label>
+          <label>Chat ID<input name="chat_id" inputmode="numeric" autocomplete="off" placeholder="Your chat with the bot" required /></label>
+          <p id="telegram-error" class="error" hidden></p>
+          <button id="telegram-save" class="primary" type="submit">Save and connect</button>
+          <button id="telegram-test" class="ghost" type="button">Send a test</button>
+        </form>
+      </article>
     </div>
     <div data-panel="webhooks" hidden>
       <p class="muted">Webhook secrets are shown once in the desk software and are not listed here.</p>

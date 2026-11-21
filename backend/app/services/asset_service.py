@@ -159,6 +159,10 @@ def request_withdrawal(db: Session, user: User, currency: str, amount: Decimal, 
         after={"currency": coin, "amount": format(cash, "f"), "status": row.status, "address": destination},
         ip_address=ip,
     )
+    from app.services.telegram_notice_service import notify_user
+
+    label = "paused until the open withdrawal finishes" if row.status == "paused" else "processing"
+    notify_user(db, user.id, f"Account update: withdrawal of {format(cash, 'f')} {coin.upper()} is {label}.")
     return _payload(row)
 
 
@@ -205,6 +209,9 @@ def approve_withdrawal(db: Session, actor: User, roles: list[str], transfer_id, 
         if not row.note:
             row.note = "Approved"
     _release_paused_withdrawal(db, row.user_id, row.organization_id, ip, actor.id)
+    from app.services.ledger_service import post_asset_transfer
+
+    post_asset_transfer(db, row)
     write_audit(
         db,
         organization_id=row.organization_id,
@@ -275,6 +282,12 @@ def settle_asset_deposit(db: Session, organization_id, order_id: str, status: st
         entity_id=str(row.id),
         after={"currency": row.currency, "amount": format(received, "f")},
     )
+    from app.services.telegram_notice_service import notify_user
+
+    notify_user(db, row.user_id, f"Account update: {format(received, 'f')} {row.currency.upper()} was added to the wallet.")
+    from app.services.ledger_service import post_asset_transfer
+
+    post_asset_transfer(db, row)
 
 
 def settle_asset_payout(db: Session, organization_id, body: dict) -> dict | None:
@@ -295,6 +308,9 @@ def settle_asset_payout(db: Session, organization_id, body: dict) -> dict | None
         return {"status": "pending", "id": str(row.id)}
     row.status = state
     _release_paused_withdrawal(db, row.user_id, row.organization_id, "")
+    from app.services.ledger_service import post_asset_transfer
+
+    post_asset_transfer(db, row)
     write_audit(
         db,
         organization_id=organization_id,

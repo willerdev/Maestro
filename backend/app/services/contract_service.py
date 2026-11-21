@@ -121,6 +121,9 @@ def fund_contract(db: Session, user: User, roles: list[str], account_id: UUID, a
         after={"amount": format(cash, "f"), "account_id": str(account.id), "status": "hold"},
         ip_address=ip,
     )
+    from app.services.telegram_notice_service import notify_user
+
+    notify_user(db, user.id, f"Contract update: {format(cash, 'f')} USDT moved onto {account.display_name}.")
     names = {account.id: account.display_name}
     return {"transfer": _payload(transfer), "position": _stake_view(stake, names[account.id]), "wallet_usdt": format(wallet_usdt(db, user), "f")}
 
@@ -278,6 +281,10 @@ def _accrue_stake(db: Session, stake: ContractStake) -> int:
         current = nxt
         credited += 1
     _mirror_contract_balance(db, stake)
+    if credited:
+        from app.services.telegram_notice_service import notify_user
+
+        notify_user(db, stake.user_id, f"Contract update: {format(stake.yield_earned, 'f')} USDT is now earned on the contract.")
     return credited
 
 

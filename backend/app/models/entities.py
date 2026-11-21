@@ -59,6 +59,19 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class UserTelegramNotice(Base):
+    __tablename__ = "user_telegram_notices"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    app_id: Mapped[str] = mapped_column(String(32), default="")
+    chat_id: Mapped[str] = mapped_column(String(32), default="")
+    secret_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class UserPayoutAddress(Base):
     __tablename__ = "user_payout_addresses"
 
@@ -1194,6 +1207,41 @@ class TradingHalt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class LedgerAccount(Base):
+    __tablename__ = "ledger_accounts"
+    __table_args__ = (UniqueConstraint("organization_id", "code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(8))
+    name: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(16))
+    normal: Mapped[str] = mapped_column(String(8))
+
+
+class LedgerJournal(Base):
+    __tablename__ = "ledger_journals"
+    __table_args__ = (UniqueConstraint("organization_id", "source_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    source_key: Mapped[str] = mapped_column(String(80))
+    memo: Mapped[str] = mapped_column(String(240))
+    status: Mapped[str] = mapped_column(String(16), default="posted")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LedgerLine(Base):
+    __tablename__ = "ledger_lines"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    journal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ledger_journals.id"), index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ledger_accounts.id"), index=True)
+    debit: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("0"))
+    credit: Mapped[Decimal] = mapped_column(Numeric(28, 8), default=Decimal("0"))
+    currency: Mapped[str] = mapped_column(String(16))
+
+
 class SystemEvent(Base):
     __tablename__ = "system_events"
 
@@ -1204,6 +1252,16 @@ class SystemEvent(Base):
     message: Mapped[str] = mapped_column(String(400), default="")
     context: Mapped[dict] = mapped_column(JsonDoc, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+@event.listens_for(LedgerJournal, "before_update", propagate=True)
+def _journal_no_update(mapper, connection, target) -> None:  # noqa: ARG001
+    raise PermissionError("posted ledger journals are immutable")
+
+
+@event.listens_for(LedgerJournal, "before_delete", propagate=True)
+def _journal_no_delete(mapper, connection, target) -> None:  # noqa: ARG001
+    raise PermissionError("posted ledger journals are immutable")
 
 
 @event.listens_for(AuditLog, "before_update", propagate=True)

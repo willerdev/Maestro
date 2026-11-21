@@ -240,7 +240,18 @@ def subscribe(db: Session, user: User, fund_id: UUID, name: str, email: str, amo
     holding.units = _q(holding.units + issued)
     holding.capital_paid = _q(holding.capital_paid + amount)
     fund.units_outstanding = _q(fund.units_outstanding + issued)
-    db.add(CapitalMovement(holding_id=holding.id, kind="subscribe", amount=amount, units=issued, unit_price=nav.unit_price))
+    movement = CapitalMovement(holding_id=holding.id, kind="subscribe", amount=amount, units=issued, unit_price=nav.unit_price)
+    db.add(movement)
+    db.flush()
+    from app.services.ledger_service import record_safely
+
+    record_safely(
+        db,
+        user.organization_id,
+        f"fund:subscribe:{movement.id}",
+        f"Subscription {investor.email}",
+        [("1100", amount, Decimal("0"), fund.base_currency), ("2100", Decimal("0"), amount, fund.base_currency)],
+    )
     write_audit(
         db,
         organization_id=user.organization_id,
@@ -267,7 +278,18 @@ def redeem(db: Session, user: User, fund_id: UUID, investor_id: UUID, amount: De
         raise FundError(400, "That redemption is larger than the holding")
     holding.units = _q(holding.units - units)
     fund.units_outstanding = _q(fund.units_outstanding - units)
-    db.add(CapitalMovement(holding_id=holding.id, kind="redeem", amount=amount, units=units, unit_price=nav.unit_price))
+    movement = CapitalMovement(holding_id=holding.id, kind="redeem", amount=amount, units=units, unit_price=nav.unit_price)
+    db.add(movement)
+    db.flush()
+    from app.services.ledger_service import record_safely
+
+    record_safely(
+        db,
+        user.organization_id,
+        f"fund:redeem:{movement.id}",
+        f"Redemption {investor.email}",
+        [("2100", amount, Decimal("0"), fund.base_currency), ("2200", Decimal("0"), amount, fund.base_currency)],
+    )
     write_audit(
         db,
         organization_id=user.organization_id,
@@ -317,6 +339,16 @@ def accrue_fees(db: Session, user: User, fund_id: UUID) -> list[dict]:
     if not created:
         raise FundError(400, "No fee to record at this NAV")
     db.flush()
+    from app.services.ledger_service import record_safely
+
+    for row in created:
+        record_safely(
+            db,
+            user.organization_id,
+            f"fund:fee:{row.id}",
+            f"{row.kind} fee",
+            [("2100", row.amount, Decimal("0"), fund.base_currency), ("4100", Decimal("0"), row.amount, fund.base_currency)],
+        )
     write_audit(db, organization_id=user.organization_id, actor_user_id=user.id, action="fees_accrued", entity_type="fund", entity_id=str(fund.id), after={"count": len(created)})
     return [{"kind": row.kind, "amount": _text(row.amount)} for row in created]
 

@@ -191,6 +191,9 @@ body.in .shell { padding-bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
 .sum.in { color: #9cf0d2; }
 .sum.out { color: #ffb4b4; }
 .feed-row .ghost { grid-column: 2 / -1; justify-self: start; padding: 0.45rem 0.75rem; }
+.telegram-card { display: grid; gap: 0.75rem; }
+.steps { margin: 0; padding-left: 1.15rem; display: grid; gap: 0.4rem; color: #d5e2ee; font-size: 0.88rem; line-height: 1.4; }
+.telegram-card .pill { justify-self: start; }
 .meta { color: #8ea3b3; font-size: 0.82rem; }
 .pill {
   display: inline-flex;

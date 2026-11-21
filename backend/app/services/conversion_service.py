@@ -71,7 +71,9 @@ def _spendable(db: Session, org_id, user_id) -> int:
     ledger = load_ledger(db, org_id)
     from app.services.mining_plan_service import bonus_available
 
-    return max(0, ledger.available(wallet.address) - pcoin_hold(db, org_id, user_id) + bonus_available(db, org_id, user_id))
+    from app.services.pcoin_approval_service import held_pcoin_atomic
+
+    return max(0, ledger.available(wallet.address) - pcoin_hold(db, org_id, user_id) + bonus_available(db, org_id, user_id) - held_pcoin_atomic(db, org_id, user_id))
 
 
 def _public_conversion(row: ChainConversion) -> dict:

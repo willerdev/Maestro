@@ -168,6 +168,13 @@ class TelegramTestIn(BaseModel):
     bot_token: str = ""
 
 
+class TelegramNoticeIn(BaseModel):
+    app_id: str = ""
+    api_hash: str = ""
+    bot_token: str = ""
+    chat_id: str = ""
+
+
 class TelegramUserCodeIn(BaseModel):
     phone: str = Field(min_length=8, max_length=32)
 
@@ -1069,6 +1076,39 @@ def put_telegram(payload: TelegramSettingsIn, principal: Principal = Depends(get
     )
     db.commit()
     return result
+
+
+@router.get("/telegram/notify")
+def get_telegram_notice(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    from app.services.telegram_notice_service import notice_view
+
+    return notice_view(db, principal.user)
+
+
+@router.put("/telegram/notify")
+def put_telegram_notice(payload: TelegramNoticeIn, principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    from app.services.alert_service import TelegramError
+    from app.services.telegram_notice_service import save_notice
+
+    try:
+        body = save_notice(db, principal.user, payload.app_id, payload.api_hash, payload.bot_token, payload.chat_id)
+    except TelegramError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    db.commit()
+    return body
+
+
+@router.post("/telegram/notify/test")
+def test_telegram_notice(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    from app.services.alert_service import TelegramError
+    from app.services.telegram_notice_service import send_test
+
+    try:
+        body = send_test(db, principal.user)
+    except TelegramError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    db.commit()
+    return body
 
 
 @router.post("/telegram/test")

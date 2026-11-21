@@ -19,12 +19,17 @@ type Fund = {
   movements?: Move[];
 };
 
+type LedgerAccount = { code: string; name: string; kind: string; balance: string; debit: string; credit: string };
+type Ledger = { balanced: boolean; accounts: LedgerAccount[]; journals: { id: string; memo: string; status: string; created_at: string }[] };
+
 export default function FundsPage() {
   const [rows, setRows] = useState<Fund[]>([]);
+  const [ledger, setLedger] = useState<Ledger | null>(null);
   const [message, setMessage] = useState("");
 
   function load() {
     apiJson<Fund[]>("/api/v1/funds").then(setRows).catch((error: Error) => setMessage(error.message));
+    apiJson<Ledger>("/api/v1/ledger").then(setLedger).catch(() => setLedger(null));
   }
 
   useEffect(() => {
@@ -99,7 +104,30 @@ export default function FundsPage() {
 
   return (
     <div className="max-w-5xl">
-      <PageTitle title="Funds" detail="A fund owns a share of live account equity. Subscriptions do not move broker cash." />
+      <PageTitle title="Funds" detail="A fund owns a share of live account equity. Subscriptions do not move broker cash. The ledger below posts the same wallet and fund records in double entry." />
+      {ledger ? (
+        <section className="kpi-band">
+          <h2>{ledger.balanced ? "Ledger balanced" : "Ledger out of balance"}</h2>
+          <div className="book overflow-x-auto mb-4">
+            <table>
+              <thead>
+                <tr><th>Account</th><th>Kind</th><th>Debit</th><th>Credit</th><th>Balance</th></tr>
+              </thead>
+              <tbody>
+                {ledger.accounts.length ? ledger.accounts.map((row) => (
+                  <tr key={row.code}>
+                    <td>{row.code} {row.name}</td>
+                    <td>{row.kind}</td>
+                    <td className="num">{row.debit}</td>
+                    <td className="num">{row.credit}</td>
+                    <td className="num">{row.balance}</td>
+                  </tr>
+                )) : <tr><td colSpan={5}>No posted movements yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
       <section className="mb-8 border border-line bg-panel rounded-lg p-4">
         <h2 className="mb-1">Wallets</h2>
         <p className="text-sm text-muted mb-3">Save a wallet address on a fund, then deposit or withdraw the cash recorded at that address. This does not change broker equity.</p>
