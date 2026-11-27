@@ -88,7 +88,7 @@ def post_join(payload: JoinIn, request: Request, response: Response, db: Session
     except (PortalError, AuthError) as exc:
         _fail(exc)
     _cookies(response, access, refresh)
-    return {"access_token": access, "user": _user_payload(user, ["APPLICANT"])}
+    return {"access_token": access, "refresh_token": refresh, "user": _user_payload(user, ["APPLICANT"])}
 
 
 @router.get("/join-code")

@@ -5,15 +5,33 @@ const signout = document.querySelector("#signout");
 const sheet = document.querySelector("#sheet");
 const form = document.querySelector("#action-form");
 const receipt = document.querySelector("#receipt");
+const ACCESS_KEY = "maestro-phone-access";
+const REFRESH_KEY = "maestro-phone-refresh";
 let mfaToken = "";
 let homeBody = null;
 let action = null;
 let generation = 0;
+let refreshTask = null;
 
 function headers(json) {
-  const value = { "X-Tradeguard-Request": "1" };
+  const value = { "X-Tradeguard-Request": "1", "Cache-Control": "no-store" };
   if (json) value["Content-Type"] = "application/json";
   return value;
+}
+
+function saveTokens(body) {
+  if (!body || typeof body !== "object") return;
+  if (typeof body.access_token === "string" && body.access_token) {
+    localStorage.setItem(ACCESS_KEY, body.access_token);
+  }
+  if (typeof body.refresh_token === "string" && body.refresh_token) {
+    localStorage.setItem(REFRESH_KEY, body.refresh_token);
+  }
+}
+
+function clearTokens() {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
 }
 
 function errorText(body, fallback) {
@@ -26,12 +44,7 @@ function errorText(body, fallback) {
   return fallback;
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "include",
-    headers: headers(Boolean(options.body)),
-    ...options,
-  });
+async function parseResponse(response) {
   const text = await response.text();
   let body = {};
   if (text) {
@@ -41,6 +54,55 @@ async function api(path, options = {}) {
       throw new Error("The wallet did not answer. Refresh and try again.");
     }
   }
+  return body;
+}
+
+async function refreshAccess() {
+  if (refreshTask) return refreshTask;
+  const stored = localStorage.getItem(REFRESH_KEY) || "";
+  refreshTask = fetch("/api/v1/auth/refresh", {
+    method: "POST",
+    credentials: "include",
+    cache: "no-store",
+    headers: headers(Boolean(stored)),
+    body: stored ? JSON.stringify({ refresh_token: stored }) : undefined,
+  })
+    .then(async (response) => {
+      const body = await parseResponse(response);
+      if (!response.ok) return false;
+      saveTokens(body);
+      return Boolean(localStorage.getItem(ACCESS_KEY));
+    })
+    .catch(() => false)
+    .finally(() => {
+      refreshTask = null;
+    });
+  return refreshTask;
+}
+
+async function api(path, options = {}, retry = true) {
+  const hdrs = headers(Boolean(options.body));
+  const token = localStorage.getItem(ACCESS_KEY);
+  if (token) hdrs.Authorization = `Bearer ${token}`;
+  if (options.headers) Object.assign(hdrs, options.headers);
+  const { headers: _ignored, ...rest } = options;
+  const response = await fetch(path, {
+    credentials: "include",
+    cache: "no-store",
+    ...rest,
+    headers: hdrs,
+  });
+  if (
+    response.status === 401 &&
+    retry &&
+    !path.startsWith("/api/v1/auth/login") &&
+    !path.startsWith("/api/v1/auth/refresh") &&
+    !path.startsWith("/api/v1/auth/mfa")
+  ) {
+    const refreshed = await refreshAccess();
+    if (refreshed) return api(path, options, false);
+  }
+  const body = await parseResponse(response);
   if (!response.ok) throw new Error(errorText(body, "That did not go through"));
   return body;
 }
@@ -599,6 +661,7 @@ loginForm.addEventListener("submit", async (event) => {
       showNotice("Enter the authentication code from your authenticator.");
       return;
     }
+    saveTokens(body);
     signedIn(true);
     document.querySelector("#who").hidden = false;
     document.querySelector("#who").textContent = (body.user && (body.user.full_name || body.user.email)) || email;
@@ -624,7 +687,8 @@ document.querySelector("#mfa-form").addEventListener("submit", async (event) => 
   showNotice("Checking the code…");
   const data = new FormData(event.currentTarget);
   try {
-    await api("/api/v1/auth/mfa", { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code: data.get("code") }) });
+    const body = await api("/api/v1/auth/mfa", { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code: data.get("code") }) });
+    saveTokens(body);
     signedIn(true);
     showNotice("Loading your wallet…");
     await load();
@@ -682,6 +746,7 @@ document.querySelector("#password-form").addEventListener("submit", async (event
 signout.addEventListener("click", async () => {
   generation += 1;
   await api("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
+  clearTokens();
   signedIn(false);
   document.querySelector("#who").hidden = true;
 });

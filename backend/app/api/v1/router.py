@@ -261,15 +261,24 @@ def _plain(value, places: int | None = None) -> str:
     return text or "0"
 
 
+def _cookie_samesite() -> str:
+    # Secure cookies can be SameSite=None so a desk on another origin still
+    # sends them on API fetch. Local HTTP must stay Lax or browsers reject them.
+    return "none" if get_settings().cookie_secure else "lax"
+
+
 def _cookies(response: Response, access: str, refresh: str) -> None:
     settings = get_settings()
-    response.set_cookie("tg_access", access, httponly=True, samesite="lax", secure=settings.cookie_secure, max_age=settings.access_token_minutes * 60, path="/")
-    response.set_cookie("tg_refresh", refresh, httponly=True, samesite="lax", secure=settings.cookie_secure, max_age=settings.refresh_token_days * 86400, path="/")
+    shared = {"httponly": True, "samesite": _cookie_samesite(), "secure": settings.cookie_secure, "path": "/"}
+    response.set_cookie("tg_access", access, max_age=settings.access_token_minutes * 60, **shared)
+    response.set_cookie("tg_refresh", refresh, max_age=settings.refresh_token_days * 86400, **shared)
 
 
 def _clear_cookies(response: Response) -> None:
-    response.delete_cookie("tg_access", path="/")
-    response.delete_cookie("tg_refresh", path="/")
+    settings = get_settings()
+    shared = {"path": "/", "samesite": _cookie_samesite(), "secure": settings.cookie_secure}
+    response.delete_cookie("tg_access", **shared)
+    response.delete_cookie("tg_refresh", **shared)
 
 
 def _user_payload(user: User, roles: list[str]) -> dict:
@@ -347,7 +356,7 @@ def register(payload: RegisterIn, request: Request, response: Response, db: Sess
     except AuthError as exc:
         raise HTTPException(exc.status, exc.detail) from exc
     _cookies(response, access, refresh)
-    return {"access_token": access, "user": _user_payload(user, ["SUPER_ADMIN"])}
+    return {"access_token": access, "refresh_token": refresh, "user": _user_payload(user, ["SUPER_ADMIN"])}
 
 
 @router.post("/auth/login")
@@ -363,7 +372,7 @@ def login(payload: LoginIn, request: Request, response: Response, db: Session = 
     if not access:
         return {"mfa_required": True, "mfa_token": encode_mfa_token(user_id=user.id)}
     _cookies(response, access, refresh)
-    return {"access_token": access, "user": _user_payload(user, roles)}
+    return {"access_token": access, "refresh_token": refresh, "user": _user_payload(user, roles)}
 
 
 @router.post("/auth/mfa")
@@ -382,19 +391,26 @@ def confirm_mfa(payload: MfaIn, request: Request, response: Response, db: Sessio
     except AuthError as exc:
         raise HTTPException(exc.status, exc.detail) from exc
     _cookies(response, access, refresh)
-    return {"access_token": access, "user": _user_payload(user, roles)}
+    return {"access_token": access, "refresh_token": refresh, "user": _user_payload(user, roles)}
 
 
 @router.post("/auth/refresh")
-def refresh(request: Request, response: Response, db: Session = Depends(get_db)):
+async def refresh(request: Request, response: Response, db: Session = Depends(get_db)):
     raw = request.cookies.get("tg_refresh", "")
+    if not raw:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            raw = str(body.get("refresh_token") or "")
     try:
         user, access, refresh_token, roles = refresh_session(db, raw, _client_ip(request), request.headers.get("user-agent", ""))
         db.commit()
     except AuthError as exc:
         raise HTTPException(exc.status, exc.detail) from exc
     _cookies(response, access, refresh_token)
-    return {"access_token": access, "user": _user_payload(user, roles)}
+    return {"access_token": access, "refresh_token": refresh_token, "user": _user_payload(user, roles)}
 
 
 @router.post("/auth/logout")
