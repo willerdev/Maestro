@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.chain.eth import address_from_private, parse_address
-from app.core.encryption import encrypt_json
+from app.core.encryption import EncryptionError, encrypt_json
 from app.models.chain_entities import ExtraWalletRow
 
 PROVIDERS = {
@@ -43,14 +43,20 @@ def save_extra_wallet(db: Session, org_id: UUID, user_id: UUID, provider: str, p
             address = address_from_private(private)
         except ValueError as exc:
             raise ExtraWalletError(400, str(exc)) from exc
-        nonce, ciphertext = encrypt_json({"private_key": private.removeprefix("0x").removeprefix("0X").lower(), "provider": provider})
+        try:
+            nonce, ciphertext = encrypt_json({"private_key": private.removeprefix("0x").removeprefix("0X").lower(), "provider": provider})
+        except EncryptionError as exc:
+            raise ExtraWalletError(503, "Wallet encryption is not configured on this server") from exc
         source = "key"
     elif address_in:
         try:
             address = parse_address(address_in)
         except ValueError as exc:
             raise ExtraWalletError(400, str(exc)) from exc
-        nonce, ciphertext = encrypt_json({"address": address, "provider": provider})
+        try:
+            nonce, ciphertext = encrypt_json({"address": address, "provider": provider})
+        except EncryptionError as exc:
+            raise ExtraWalletError(503, "Wallet encryption is not configured on this server") from exc
         source = "address"
     else:
         raise ExtraWalletError(400, "Paste a private key or a public address")

@@ -46,28 +46,39 @@ export function deviceId(): string {
   }
 }
 
-export function saveSession(token: string) {
+export function saveSession(token: string, refreshToken?: string) {
   sessionStorage.setItem("tg_access", token);
+  if (typeof refreshToken === "string" && refreshToken) {
+    sessionStorage.setItem("tg_refresh", refreshToken);
+  }
 }
 
 export function clearSession() {
   sessionStorage.removeItem("tg_access");
+  sessionStorage.removeItem("tg_refresh");
 }
 
 let refreshTask: Promise<boolean> | null = null;
 
 function refreshAccess(): Promise<boolean> {
   if (refreshTask) return refreshTask;
+  const stored = typeof window !== "undefined" ? sessionStorage.getItem("tg_refresh") || "" : "";
   refreshTask = fetch(`${API}/api/v1/auth/refresh`, {
     method: "POST",
     credentials: "include",
     cache: "no-store",
-    headers: { "X-Tradeguard-Request": "1" },
+    headers: {
+      "X-Tradeguard-Request": "1",
+      ...(stored ? { "Content-Type": "application/json" } : {}),
+    },
+    body: stored ? JSON.stringify({ refresh_token: stored }) : undefined,
   })
     .then(async (refreshed) => {
       if (!refreshed.ok) return false;
       const body = await refreshed.json();
-      if (typeof body.access_token === "string") saveSession(body.access_token);
+      if (typeof body.access_token === "string") {
+        saveSession(body.access_token, typeof body.refresh_token === "string" ? body.refresh_token : undefined);
+      }
       return typeof body.access_token === "string";
     })
     .catch(() => false)

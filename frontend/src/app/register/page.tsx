@@ -21,7 +21,7 @@ export default function RegisterPage() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      const body = await apiJson<{ access_token: string }>("/api/v1/auth/register", {
+      const body = await apiJson<{ access_token: string; refresh_token?: string }>("/api/v1/auth/register", {
         method: "POST",
         body: JSON.stringify({
           email: form.get("email"),
@@ -30,7 +30,7 @@ export default function RegisterPage() {
           organization_name: form.get("organization_name"),
         }),
       });
-      saveSession(body.access_token);
+      saveSession(body.access_token, body.refresh_token);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");

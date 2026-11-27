@@ -56,7 +56,7 @@ export default function JoinPage() {
           rules_accepted: form.get("rules_accepted") === "on",
         };
     try {
-      const body = await apiJson<{ access_token: string }>("/api/v1/join", {
+      const body = await apiJson<{ access_token: string; refresh_token?: string }>("/api/v1/join", {
         method: "POST",
         body: JSON.stringify({
           code: form.get("code"),
@@ -67,7 +67,7 @@ export default function JoinPage() {
           answers,
         }),
       });
-      saveSession(body.access_token);
+      saveSession(body.access_token, body.refresh_token);
       router.push("/pending");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Application was not sent");

@@ -24,15 +24,15 @@ export default function LoginPage() {
     const form = new FormData(event.currentTarget);
     try {
       if (mfaToken) {
-        const body = await apiJson<{ access_token: string }>("/api/v1/auth/mfa", {
+        const body = await apiJson<{ access_token: string; refresh_token?: string }>("/api/v1/auth/mfa", {
           method: "POST",
           body: JSON.stringify({ mfa_token: mfaToken, code: form.get("code") }),
         });
-        saveSession(body.access_token);
+        saveSession(body.access_token, body.refresh_token);
         router.push("/dashboard");
         return;
       }
-      const body = await apiJson<{ access_token?: string; mfa_required?: boolean; mfa_token?: string; user?: { roles: string[] } }>("/api/v1/auth/login", {
+      const body = await apiJson<{ access_token?: string; refresh_token?: string; mfa_required?: boolean; mfa_token?: string; user?: { roles: string[] } }>("/api/v1/auth/login", {
         method: "POST",
         body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
       });
@@ -40,7 +40,7 @@ export default function LoginPage() {
         setMfaToken(body.mfa_token);
         return;
       }
-      if (body.access_token) saveSession(body.access_token);
+      if (body.access_token) saveSession(body.access_token, body.refresh_token);
       router.push(homeFor(body.user?.roles || []));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
